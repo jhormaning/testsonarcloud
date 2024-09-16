@@ -21,3 +21,5 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}    # Token de SonarCloud
           SONAR_PROJECTKEY: "jhormaning_testsonarcloud"       # Reemplaza con tu projectKey de SonarCloud
           SONAR_ORGANIZATION: "jhormaning"    # Reemplaza con tu organización en SonarCloud
+          SONAR_SCANNER_OPTS: "-Dsonar.inclusions=**/*.sql"
+

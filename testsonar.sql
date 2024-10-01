@@ -9,7 +9,6 @@ DECLARE
   p_partitions_desp NUMBER := &5;
   v_fecha_base date;
   v_sql VARCHAR2(8000);
-  v_sql_ddl VARCHAR2(20);
   v_sql_ddlt VARCHAR2(20);
   v_sql_ddli VARCHAR2(20);
   v_sql_ddlc VARCHAR2(20);
@@ -279,8 +278,7 @@ EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."TIMEIN" IS ''Hora 
    EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."PRCODE" IS ''Codigo de proceso de la transacciÃ¯Â¿Â½n que se corresponde con el campo 3 de la norma ISO 8583. Su formato es "AAFFTT", donde:'||
 'AA -> Tipo de transacciÃ¯Â¿Â½n.'||
 'FF ->  Cuenta de origen.'||
-'TT -> Cuenta de destino.
-''';
+'TT -> Cuenta de destino.''';
    EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."AMOUNT_TXN" IS ''Monto de la transacciÃ¯Â¿Â½n, en una moneda determinada, que es procesada por el SWITCH. Se corresponde con el campo 4 de la norma ISO 8583.''';
    EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."AMOUNT_STTL" IS ''Monto a transferirse del adquiriente al autorizador, en una moneda determinada, para equiparar los montos de las transacciones realizadas entre estas instituciones.Se corresponde con el campo 5 de la norma ISO 8583.''';
    EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."AMOUNT_CARDHOLD" IS ''Monto de la transacciÃ¯Â¿Â½n que realiza el cardholder, en una moneda  determinada. Se corresponde con el campo 6 de la norma ISO 8583.''';

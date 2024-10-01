@@ -8,6 +8,7 @@ DECLARE
   v_tabla_leg VARCHAR2(30);
   v_sql_ddl VARCHAR2(80);
   v_sql_idx VARCHAR2(80);
+  v_sql_rename VARCHAR2(80);
   v_countgeneral NUMBER;
   v_out_mensaje VARCHAR2(400);
   v_query_count VARCHAR2(200);
@@ -29,20 +30,21 @@ BEGIN
     EXECUTE IMMEDIATE 'ALTER SESSION SET NLS_DATE_FORMAT = ''YYYY-MM-DD''';
     v_sql_ddl:='ALTER TABLE';
     v_sql_idx:='ALTER INDEX';
+    v_sql_rename:='RENAME TO';
     v_tabla:='PINERR';
     v_tabla_leg:='PINERR_LEG';
     v_tabla_legacy:='PINERR_LEGACY';
 
     --Particionada a LEG
-    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla||' RENAME TO '||v_tabla_leg; 
+    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla||' '||v_sql_rename||' '||v_tabla_leg; 
     EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla_leg||' RENAME CONSTRAINT PK_PAN TO PK_PAN_LEG'; 
     EXECUTE IMMEDIATE v_sql_idx||' '||p_schema||'.PK_PAN RENAME TO PK_PAN_LEG';
     --Legacy a Regular
-    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla_legacy||' RENAME TO '||v_tabla||''; 
+    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla_legacy||'  '||v_sql_rename||' '||v_tabla||''; 
     EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla||' RENAME CONSTRAINT PK_PAN_LEGACY TO PK_PAN'; 
     EXECUTE IMMEDIATE v_sql_idx||' '||p_schema||'.PK_PAN_LEGACY RENAME TO PK_PAN'; 
     --LEG a Legacy
-    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla_leg||' RENAME TO '||v_tabla_legacy; 
+    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla_leg||' '||v_sql_rename||' '||v_tabla_legacy; 
     EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla_legacy||' RENAME CONSTRAINT PK_PAN_LEG TO PK_PAN_LEGACY'; 
     EXECUTE IMMEDIATE v_sql_idx||' '||p_schema||'.PK_PAN_LEG RENAME TO PK_PAN_LEGACY';
 

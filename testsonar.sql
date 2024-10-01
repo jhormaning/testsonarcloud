@@ -9,6 +9,7 @@ DECLARE
   p_partitions_desp NUMBER := &5;
   v_fecha_base date:= SYSDATE;
   v_sql VARCHAR2(8000);
+  v_sql_ddl VARCHAR2(80);
   v_countgeneral NUMBER;
   v_tabla VARCHAR2(30);
   v_tabla_legacy VARCHAR2(50);
@@ -68,12 +69,13 @@ BEGIN
 
     v_out_mensaje:= 'Resultado:';
     v_tabla := 'PINERR';
+    v_sql_ddl:= 'ALTER TABLE';
     v_tabla_legacy:= 'PINERR_LEGACY'; 
     EXECUTE IMMEDIATE 'ALTER SESSION SET NLS_TIMESTAMP_FORMAT = ''YYYY-MM-DD''';
     EXECUTE IMMEDIATE 'ALTER SESSION SET NLS_DATE_FORMAT = ''YYYY-MM-DD''';
 
-    EXECUTE IMMEDIATE 'ALTER TABLE '||p_schema||'.'||v_tabla||' RENAME TO '||v_tabla_legacy; 
-    EXECUTE IMMEDIATE 'ALTER TABLE '||p_schema||'.'||v_tabla_legacy||' RENAME CONSTRAINT PK_PAN TO PK_PAN_LEGACY'; 
+    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla||' RENAME TO '||v_tabla_legacy; 
+    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla_legacy||' RENAME CONSTRAINT PK_PAN TO PK_PAN_LEGACY'; 
     EXECUTE IMMEDIATE 'ALTER INDEX '||p_schema||'.PK_PAN RENAME TO PK_PAN_LEGACY'; 
 
 
@@ -102,6 +104,8 @@ BEGIN
 
     EXECUTE IMMEDIATE v_sql;
 
+    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla||' ADD CONSTRAINT "PK_PAN" PRIMARY KEY ("PAN") USING INDEX TABLESPACE '||p_tbs_indice;
+
 --COMMENTS
     v_comments(1) := 'Número de la tarjeta a la cual se le ingreso una clave errada.';
     v_comments(2) := 'Número de reintentos de ingreso de clave secreta.';
@@ -114,20 +118,20 @@ BEGIN
     v_comments(9) := 'Ultimo usuario que modificó el registro.';
     v_comments(10) := 'Fecha de la ultima modificación realizada.  Formato: DD/MM/YY.';
     v_comments(11) := 'Tabla que contiene la informaciún de los tarjetahabientes que han ingresado su clave errada con el fin de llevar la cuenta de la cantidad de PINES errados a soportar';
+    v_sql_ddl:= 'COMMENT ON COLUMN';
 
-   EXECUTE IMMEDIATE 'COMMENT ON COLUMN ' || p_schema || '."PINERR"."PAN" IS ''' || v_comments(1) || '''';
-    EXECUTE IMMEDIATE 'COMMENT ON COLUMN ' || p_schema || '."PINERR"."RETRIES" IS ''' || v_comments(2) || '''';
-    EXECUTE IMMEDIATE 'COMMENT ON COLUMN ' || p_schema || '."PINERR"."LAST_DATE" IS ''' || v_comments(3) || '''';
-    EXECUTE IMMEDIATE 'COMMENT ON COLUMN '||p_schema||'."PINERR"."TERMID" IS ''' || v_comments(4) || '''';
-    EXECUTE IMMEDIATE 'COMMENT ON COLUMN '||p_schema||'."PINERR"."RETRIES_EXE" IS ''' || v_comments(5) || '''';
-    EXECUTE IMMEDIATE 'COMMENT ON COLUMN '||p_schema||'."PINERR"."LAST_TIME" IS ''' || v_comments(6) || '''';
-    EXECUTE IMMEDIATE 'COMMENT ON COLUMN '||p_schema||'."PINERR"."USERIN" IS ''' || v_comments(7) || '''';
-    EXECUTE IMMEDIATE 'COMMENT ON COLUMN '||p_schema||'."PINERR"."DATEIN" IS ''' || v_comments(8) || '''';
-    EXECUTE IMMEDIATE 'COMMENT ON COLUMN '||p_schema||'."PINERR"."USERCHG" IS ''' || v_comments(9) || '''';
-    EXECUTE IMMEDIATE 'COMMENT ON COLUMN '||p_schema||'."PINERR"."DATECHG" IS ''' || v_comments(10) || '''';
-    EXECUTE IMMEDIATE 'COMMENT ON TABLE '||p_schema||'."PINERR"  IS ''' || v_comments(11) || '''';
+    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla||'."PAN" IS ''' || v_comments(1) || '''';
+    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla||'."RETRIES" IS ''' || v_comments(2) || '''';
+    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla||'."LAST_DATE" IS ''' || v_comments(3) || '''';
+    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla||'."TERMID" IS ''' || v_comments(4) || '''';
+    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla||'."RETRIES_EXE" IS ''' || v_comments(5) || '''';
+    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla||'."LAST_TIME" IS ''' || v_comments(6) || '''';
+    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla||'."USERIN" IS ''' || v_comments(7) || '''';
+    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla||'."DATEIN" IS ''' || v_comments(8) || '''';
+    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla||'."USERCHG" IS ''' || v_comments(9) || '''';
+    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla||'."DATECHG" IS ''' || v_comments(10) || '''';
+    EXECUTE IMMEDIATE 'COMMENT ON TABLE '||p_schema||'.'||v_tabla||'  IS ''' || v_comments(11) || '''';
  
-    EXECUTE IMMEDIATE 'ALTER TABLE '||p_schema||'.'||v_tabla||' ADD CONSTRAINT "PK_PAN" PRIMARY KEY ("PAN") USING INDEX TABLESPACE '||p_tbs_indice;
     
     v_out_mensaje:= v_out_mensaje||''||CHR(10)||'OK: Tabla PINERR Particionada creada';
 
@@ -158,8 +162,9 @@ BEGIN
     EXECUTE IMMEDIATE v_sql;
     v_tabla := 'THPINERR';
     v_tabla_legacy:= 'THPINERR_LEGACY';
+    v_sql_ddl:= 'ALTER TABLE';
 
-    EXECUTE IMMEDIATE 'ALTER TABLE '||p_schema||'.'||v_tabla||' ADD CONSTRAINT "PK_THPAN" PRIMARY KEY ("PAN") USING INDEX TABLESPACE '||p_tbs_indice;
+    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla||' ADD CONSTRAINT "PK_THPAN" PRIMARY KEY ("PAN") USING INDEX TABLESPACE '||p_tbs_indice;
 
     v_out_mensaje:= v_out_mensaje||''||CHR(10)||'OK: Tabla THPINERR Particionada creada';
     DBMS_OUTPUT.PUT_LINE(v_out_mensaje);

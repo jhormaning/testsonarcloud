@@ -12,7 +12,7 @@ DECLARE
   v_countgeneral NUMBER;
   v_tabla VARCHAR2(30);
   v_query_count VARCHAR2(200);
-  v_out_mensaje VARCHAR(500);
+  v_out_mensaje VARCHAR2(500);
   e_schemanovalido          EXCEPTION;
   e_tbsdatonovalido       EXCEPTION;
   e_tbsindicenovalido     EXCEPTION;
@@ -74,26 +74,24 @@ BEGIN
 
 
     v_sql := 'CREATE TABLE '||p_schema||'.PINERR (
-    "PAN" VARCHAR2(64 BYTE) NOT NULL ENABLE, 
-  	"RETRIES" NUMBER(2,0), 
-  	"LAST_DATE" NUMBER(10,0), 
-  	"TERMID" VARCHAR2(8 BYTE), 
-  	"RETRIES_EXE" VARCHAR2(1 BYTE), 
-  	"LAST_TIME" VARCHAR2(6 BYTE), 
+    "PAN" VARCHAR2(64 BYTE) NOT NULL ENABLE,
+  	"RETRIES" NUMBER(2,0),
+  	"LAST_DATE" NUMBER(10,0),
+  	"TERMID" VARCHAR2(8 BYTE),
+  	"RETRIES_EXE" VARCHAR2(1 BYTE),
+  	"LAST_TIME" VARCHAR2(6 BYTE),
   	"USERIN" VARCHAR2(24 BYTE) DEFAULT substr(user,1,24), 
-  	"DATEIN" DATE DEFAULT sysdate, 
-  	"USERCHG" VARCHAR2(24 BYTE), 
-  	"DATECHG" DATE) TABLESPACE '||p_tbs_dato||' PARTITION BY RANGE (DATEIN) 
-    (';
+  	"DATEIN" DATE DEFAULT sysdate,
+  	"USERCHG" VARCHAR2(24 BYTE),
+  	"DATECHG" DATE) TABLESPACE '||p_tbs_dato||' PARTITION BY RANGE (DATEIN) (';
 
     FOR i IN -p_partitions_antes .. p_partitions_desp LOOP
          
-    v_sql := v_sql || '  PARTITION P_PINERR_'||TO_CHAR(ADD_MONTHS(v_fecha_base,i),'YYYYMM')||' 
-    VALUES LESS THAN ('''||TO_CHAR(TRUNC(ADD_MONTHS(v_fecha_base,i+1), 'MM'),'YYYY-MM-DD')||''')';
+    v_sql := v_sql || ' PARTITION P_PINERR_'||TO_CHAR(ADD_MONTHS(v_fecha_base,i),'YYYYMM')||' VALUES LESS THAN ('''||TO_CHAR(TRUNC(ADD_MONTHS(v_fecha_base,i+1), 'MM'),'YYYY-MM-DD')||''')';
          
-      IF i < p_partitions_desp THEN
+    IF i < p_partitions_desp THEN
         v_sql := v_sql || ', ';
-      END IF;
+    END IF;
 
     END LOOP;      
     v_sql := v_sql || ')';
@@ -113,8 +111,7 @@ BEGIN
     EXECUTE IMMEDIATE 'COMMENT ON COLUMN '||p_schema||'."PINERR"."DATECHG" IS ''Fecha de la ultima modificación realizada.  Formato: DD/MM/YY.''';
     EXECUTE IMMEDIATE 'COMMENT ON TABLE '||p_schema||'."PINERR"  IS ''Tabla que contiene la informaciún de los tarjetahabientes que han ingresado su clave errada con el fin de llevar la cuenta de la cantidad de PINES errados a soportar''';
  
-    EXECUTE IMMEDIATE 'ALTER TABLE '||p_schema||'."PINERR" ADD CONSTRAINT "PK_PAN" PRIMARY KEY ("PAN")
-    USING INDEX TABLESPACE '||p_tbs_indice;
+    EXECUTE IMMEDIATE 'ALTER TABLE '||p_schema||'."PINERR" ADD CONSTRAINT "PK_PAN" PRIMARY KEY ("PAN") USING INDEX TABLESPACE '||p_tbs_indice;
     
     v_out_mensaje:= v_out_mensaje||''||CHR(10)||'OK: Tabla PINERR Particionada creada';
 
@@ -130,13 +127,11 @@ BEGIN
     "DATEIN" DATE DEFAULT sysdate, 
     "USERCHG" VARCHAR2(24 BYTE), 
     "DATECHG" DATE ) TABLESPACE '||p_tbs_dato||'
-    PARTITION BY RANGE (DATEIN) 
-    (';
+    PARTITION BY RANGE (DATEIN) (';
               
     FOR i IN -p_partitions_antes .. p_partitions_desp LOOP
        
-    v_sql := v_sql || '  PARTITION P_THPINERR_'||TO_CHAR(ADD_MONTHS(v_fecha_base,i),'YYYYMM')||' 
-    VALUES LESS THAN ('''||TO_CHAR(TRUNC(ADD_MONTHS(v_fecha_base,i+1), 'MM'),'YYYY-MM-DD')||''')';
+    v_sql := v_sql || ' PARTITION P_THPINERR_'||TO_CHAR(ADD_MONTHS(v_fecha_base,i),'YYYYMM')||' VALUES LESS THAN ('''||TO_CHAR(TRUNC(ADD_MONTHS(v_fecha_base,i+1), 'MM'),'YYYY-MM-DD')||''')';
        
     IF i < p_partitions_desp THEN
             v_sql := v_sql || ', ';
@@ -147,8 +142,7 @@ BEGIN
     
     EXECUTE IMMEDIATE v_sql;
 
-    EXECUTE IMMEDIATE 'ALTER TABLE '||p_schema||'."THPINERR" ADD CONSTRAINT "PK_THPAN" PRIMARY KEY ("PAN")
-    USING INDEX TABLESPACE '||p_tbs_indice;
+    EXECUTE IMMEDIATE 'ALTER TABLE '||p_schema||'."THPINERR" ADD CONSTRAINT "PK_THPAN" PRIMARY KEY ("PAN") USING INDEX TABLESPACE '||p_tbs_indice;
 
     v_out_mensaje:= v_out_mensaje||''||CHR(10)||'OK: Tabla THPINERR Particionada creada';
     DBMS_OUTPUT.PUT_LINE(v_out_mensaje);
@@ -156,13 +150,13 @@ BEGIN
 
 EXCEPTION
   WHEN e_schemanovalido THEN
-        DBMS_OUTPUT.PUT_LINE('ERROR: El schema '||p_schema||' no existe');
+        DBMS_OUTPUT.PUT_LINE('ERROR: El schema '||p_schema||' no es valido');
   WHEN e_tbsdatonovalido THEN
-        DBMS_OUTPUT.PUT_LINE('ERROR: Tablespace de datos '||p_tbs_dato||' no existe');
+        DBMS_OUTPUT.PUT_LINE('ERROR: Tablespace de datos '||p_tbs_dato||' invalido');
   WHEN e_tbsindicenovalido THEN
-        DBMS_OUTPUT.PUT_LINE('ERROR: Tablespace de indices '||p_tbs_indice||' no existe');
+        DBMS_OUTPUT.PUT_LINE('ERROR: Tablespace de indices '||p_tbs_indice||' inexistente');
   WHEN e_tablanoexiste THEN
-        DBMS_OUTPUT.PUT_LINE('ERROR: La Tabla '||v_tabla||' no existe');
+        DBMS_OUTPUT.PUT_LINE('ERROR: La Tabla '||v_tabla||' no esta creada');
   WHEN e_tablaparticionada THEN
         DBMS_OUTPUT.PUT_LINE('ERROR: La Tabla '||v_tabla||' ya esta particionada');
   WHEN e_num_meses THEN

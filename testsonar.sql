@@ -12,7 +12,7 @@ BEGIN
 
   v_objeto := 'TP_PART_CONF';
   v_query_count := q'{SELECT NVL(0,1) FROM all_tables WHERE owner = :1 AND table_name = :2}';
-  EXECUTE IMMEDIATE v_countgeneral INTO v_exist USING p_schema,v_objeto;
+  EXECUTE IMMEDIATE v_query_count INTO v_countgeneral USING p_schema,v_objeto;
   IF v_countgeneral=0 THEN
         EXECUTE IMMEDIATE 'DROP TABLE &1..TP_PART_CONF PURGE';
         DBMS_OUTPUT.PUT_LINE('INFO: Se dropeo TP_PART_CONF');
@@ -20,7 +20,7 @@ BEGIN
 
   v_objeto := 'TP_PART_LOG';
   v_query_count := q'{SELECT NVL(0,1) FROM all_tables WHERE owner = :1 AND table_name = :2}';
-  EXECUTE IMMEDIATE v_countgeneral INTO v_exist USING p_schema,v_objeto;
+  EXECUTE IMMEDIATE v_query_count INTO v_countgeneral USING p_schema,v_objeto;
   IF v_countgeneral=0 THEN
         EXECUTE IMMEDIATE 'DROP TABLE &1..TP_PART_CONF PURGE';
         DBMS_OUTPUT.PUT_LINE('INFO: Se dropeo TP_PART_CONF');
@@ -28,7 +28,7 @@ BEGIN
 
   v_objeto := 'SEQ_PART_LOG';
   v_query_count := q'{SELECT NVL(0,1) FROM all_sequences WHERE sequence_owner = :1 AND sequence_name = :2}';
-  EXECUTE IMMEDIATE v_countgeneral INTO v_exist USING p_schema,v_objeto;
+  EXECUTE IMMEDIATE v_query_count INTO v_countgeneral USING p_schema,v_objeto;
   IF v_countgeneral=0 THEN
         EXECUTE IMMEDIATE 'DROP TABLE &1..TP_PART_CONF PURGE';
         DBMS_OUTPUT.PUT_LINE('INFO: Se dropeo TP_PART_CONF');

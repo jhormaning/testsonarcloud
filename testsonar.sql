@@ -2,40 +2,69 @@ SET SERVEROUTPUT ON
 spool 80PatchEFT20240930CreatePartitionPinerr.log
 
 DECLARE
-  p_schema := UPPER(&1.);
-  p_tbs_dato := UPPER(&2.);
-  p_tbs_indice := UPPER(&3.);
+  p_schema VARCHAR2(30) := UPPER('&1.');
+  p_tbs_dato VARCHAR2(50) := UPPER('&2.');
+  p_tbs_indice VARCHAR2(50) := UPPER('&3.');
   p_partitions_antes NUMBER := &4-1; 
   p_partitions_desp NUMBER := &5;
   v_fecha_base date:= SYSDATE;
   v_sql VARCHAR2(8000);
-  v_countpartition NUMBER;
-  v_counttable NUMBER;
   v_countgeneral NUMBER;
-  v_log VARCHAR2(30);
-
+  v_tabla VARCHAR2(30);
+  v_query_count VARCHAR2(200);
+  v_out_mensaje VARCHAR(500);
+  e_schemanovalido          EXCEPTION;
+  e_tbsdatonovalido       EXCEPTION;
+  e_tbsindicenovalido     EXCEPTION;
+  e_tablanoexiste     EXCEPTION;
+  e_tablaparticionada EXCEPTION;
+  e_num_meses EXCEPTION;
 BEGIN
-  SELECT COUNT(1) INTO v_countgeneral FROM ALL_USERS WHERE USERNAME= p_schema;
+
+  v_query_count := q'{SELECT COUNT(1) FROM ALL_USERS WHERE USERNAME= :1}';
+  EXECUTE IMMEDIATE v_query_count INTO v_countgeneral USING p_schema;
   IF v_countgeneral=0 THEN
-  RAISE schemanovalido;
+  RAISE e_schemanovalido;
   END IF;
 
-  SELECT COUNT(1) INTO v_countgeneral FROM USER_TABLESPACES WHERE tablespace_name= p_tbs_dato;
+  v_query_count := q'{SELECT COUNT(1) FROM USER_TABLESPACES WHERE tablespace_name= :1}';
+  EXECUTE IMMEDIATE v_query_count INTO v_countgeneral USING p_tbs_dato;
   IF v_countgeneral=0 THEN
-  RAISE tbsdatonovalido;
+  RAISE e_tbsdatonovalido;
   END IF;
 
-  SELECT COUNT(1) INTO v_countgeneral FROM USER_TABLESPACES WHERE tablespace_name= p_tbs_indice;
+  v_query_count := q'{SELECT COUNT(1) FROM USER_TABLESPACES WHERE tablespace_name= :1}';
+  EXECUTE IMMEDIATE v_query_count INTO v_countgeneral USING p_tbs_indice;
   IF v_countgeneral=0 THEN
-  RAISE tbsindicenovalido;
+  RAISE e_tbsindicenovalido;
   END IF;
-  v_log := 'Tabla PINERR';
 
-  SELECT COUNT(1) INTO v_countpartition FROM all_tab_partitions WHERE table_owner= p_schema AND table_name = 'PINERR';
-  SELECT COUNT(1) INTO v_counttable FROM all_tables WHERE owner=p_schema AND table_name = 'PINERR';
+  IF p_partitions_antes <= 0 OR p_partitions_desp <= 0 THEN
+         RAISE e_num_meses;
+  END IF;
 
-  IF v_countpartition= 0 AND v_counttable=1 THEN 
-    
+  v_tabla := 'PINERR';
+  v_query_count := q'{SELECT COUNT(1) FROM all_tables WHERE owner=:1 AND table_name = :2}';
+  EXECUTE IMMEDIATE v_query_count INTO v_countgeneral USING p_schema,v_tabla;
+  IF v_countgeneral=0 THEN
+  RAISE e_tablanoexiste;
+  END IF;
+
+  v_query_count := q'{SELECT COUNT(1) FROM all_tab_partitions WHERE table_owner= :1 AND table_name = :2}';
+  EXECUTE IMMEDIATE v_query_count INTO v_countgeneral USING p_schema,v_tabla;
+  IF v_countgeneral <> 0 THEN
+  RAISE e_tablaparticionada;
+  END IF;
+
+  v_tabla := 'THPINERR';
+  v_query_count := q'{SELECT COUNT(1) FROM all_tab_partitions WHERE table_owner= :1 AND table_name = :2}';
+  EXECUTE IMMEDIATE v_query_count INTO v_countgeneral USING p_schema,v_tabla;
+  IF v_countgeneral <> 0 THEN
+  RAISE e_tablaparticionada;
+  END IF;
+
+    v_out_mensaje:= 'Resultado:';
+   
     EXECUTE IMMEDIATE 'ALTER SESSION SET NLS_TIMESTAMP_FORMAT = ''YYYY-MM-DD''';
     EXECUTE IMMEDIATE 'ALTER SESSION SET NLS_DATE_FORMAT = ''YYYY-MM-DD''';
 
@@ -54,24 +83,21 @@ BEGIN
   	"USERIN" VARCHAR2(24 BYTE) DEFAULT substr(user,1,24), 
   	"DATEIN" DATE DEFAULT sysdate, 
   	"USERCHG" VARCHAR2(24 BYTE), 
-  	"DATECHG" DATE
-                ) TABLESPACE '||p_tbs_dato||'
-                PARTITION BY RANGE (DATEIN)
-                (';
-                
+  	"DATECHG" DATE) TABLESPACE '||p_tbs_dato||' PARTITION BY RANGE (DATEIN) 
+    (';
+
     FOR i IN -p_partitions_antes .. p_partitions_desp LOOP
          
-      v_sql := v_sql || '  PARTITION P_PINERR_'||TO_CHAR(ADD_MONTHS(v_fecha_base,i),'YYYYMM')||' 
-      VALUES LESS THAN ('''||TO_CHAR(TRUNC(ADD_MONTHS(v_fecha_base,i+1), 'MM'),'YYYY-MM-DD')||''')';
+    v_sql := v_sql || '  PARTITION P_PINERR_'||TO_CHAR(ADD_MONTHS(v_fecha_base,i),'YYYYMM')||' 
+    VALUES LESS THAN ('''||TO_CHAR(TRUNC(ADD_MONTHS(v_fecha_base,i+1), 'MM'),'YYYY-MM-DD')||''')';
          
       IF i < p_partitions_desp THEN
         v_sql := v_sql || ', ';
       END IF;
 
-    END LOOP; 
-      
+    END LOOP;      
     v_sql := v_sql || ')';
-      
+
     EXECUTE IMMEDIATE v_sql;
 
 --COMMENTS
@@ -89,21 +115,9 @@ BEGIN
  
     EXECUTE IMMEDIATE 'ALTER TABLE '||p_schema||'."PINERR" ADD CONSTRAINT "PK_PAN" PRIMARY KEY ("PAN")
     USING INDEX TABLESPACE '||p_tbs_indice;
+    
+    v_out_mensaje:= v_out_mensaje||''||CHR(10)||'OK: Tabla PINERR Particionada creada';
 
-    DBMS_OUTPUT.PUT_LINE('OK: Tabla PINERR Particionada creada');
-  ELSE
-    DBMS_OUTPUT.PUT_LINE('INFO: La tabla PINERR ya esta Particionada o no existe');
-  END IF;
-
-  v_log := 'Tabla THPINERR';
-
-  SELECT COUNT(1) INTO v_countpartition FROM all_tab_partitions WHERE table_owner=p_schema AND table_name = 'THPINERR';
-  SELECT COUNT(1) INTO v_counttable FROM all_tables WHERE owner=p_schema AND table_name = 'THPINERR';
-
-  IF v_countpartition= 0 THEN 
-
-    EXECUTE IMMEDIATE 'ALTER SESSION SET NLS_TIMESTAMP_FORMAT = ''YYYY-MM-DD''';
-    EXECUTE IMMEDIATE 'ALTER SESSION SET NLS_DATE_FORMAT = ''YYYY-MM-DD''';
 
     v_sql := 'CREATE TABLE '||p_schema||'.THPINERR (
     "PAN" VARCHAR2(64 BYTE) NOT NULL ENABLE, 
@@ -115,10 +129,9 @@ BEGIN
     "USERIN" VARCHAR2(24 BYTE) DEFAULT substr(user,1,24), 
     "DATEIN" DATE DEFAULT sysdate, 
     "USERCHG" VARCHAR2(24 BYTE), 
-    "DATECHG" DATE
-                ) TABLESPACE '||p_tbs_dato||'
-                PARTITION BY RANGE (DATEIN)
-                (';
+    "DATECHG" DATE ) TABLESPACE '||p_tbs_dato||'
+    PARTITION BY RANGE (DATEIN) 
+    (';
               
     FOR i IN -p_partitions_antes .. p_partitions_desp LOOP
        
@@ -136,22 +149,27 @@ BEGIN
 
     EXECUTE IMMEDIATE 'ALTER TABLE '||p_schema||'."THPINERR" ADD CONSTRAINT "PK_THPAN" PRIMARY KEY ("PAN")
     USING INDEX TABLESPACE '||p_tbs_indice;
-    DBMS_OUTPUT.PUT_LINE('OK: Tabla THPINERR Particionada creada');
-  ELSE
-    DBMS_OUTPUT.PUT_LINE('INFO: La tabla THPINERR ya esta Particionada o no existe');
-  END IF;
+
+    v_out_mensaje:= v_out_mensaje||''||CHR(10)||'OK: Tabla THPINERR Particionada creada';
+    DBMS_OUTPUT.PUT_LINE(v_out_mensaje);
 
 
 EXCEPTION
-  WHEN schemanovalido THEN
+  WHEN e_schemanovalido THEN
         DBMS_OUTPUT.PUT_LINE('ERROR: El schema '||p_schema||' no existe');
-  WHEN tbsdatonovalido THEN
-        DBMS_OUTPUT.PUT_LINE('ERROR: Tablespace '||p_tbs_dato||' no existe');
-  WHEN tbsindicenovalido THEN
-        DBMS_OUTPUT.PUT_LINE('ERROR: Tablespace '||p_tbs_indice||' no existe');
+  WHEN e_tbsdatonovalido THEN
+        DBMS_OUTPUT.PUT_LINE('ERROR: Tablespace de datos '||p_tbs_dato||' no existe');
+  WHEN e_tbsindicenovalido THEN
+        DBMS_OUTPUT.PUT_LINE('ERROR: Tablespace de indices '||p_tbs_indice||' no existe');
+  WHEN e_tablanoexiste THEN
+        DBMS_OUTPUT.PUT_LINE('ERROR: La Tabla '||v_tabla||' no existe');
+  WHEN e_tablaparticionada THEN
+        DBMS_OUTPUT.PUT_LINE('ERROR: La Tabla '||v_tabla||' ya esta particionada');
+  WHEN e_num_meses THEN
+        DBMS_OUTPUT.PUT_LINE('ERROR: El numero de particiones ingresado debe ser mayor a 0');
   WHEN OTHERS THEN 
-    DBMS_OUTPUT.PUT_LINE('ERROR: '||v_log||' Particionada: '||SQLERRM);
-    return;
+        DBMS_OUTPUT.PUT_LINE(v_out_mensaje||''||CHR(10)||'ERROR: '||v_tabla||' Particionada: '||SQLERRM);
+        return;
 END;
 /
 

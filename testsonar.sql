@@ -1,81 +1,80 @@
+
 SET SERVEROUTPUT ON
-spool 82PatchEFT20240930RollbackCreatePartitionPinerr.log
+SET DEFINE ON
+spool 01CreacionDDLMTTOPART.log
 
 DECLARE
-  p_schema VARCHAR2(30) := UPPER('&1');
-  v_tabla VARCHAR2(30);
-  v_tabla_legacy VARCHAR2(50);
-  v_tabla_leg VARCHAR2(30);
-  v_sql_ddl VARCHAR2(80);
-  v_sql_idx VARCHAR2(80);
-  v_sql_rename VARCHAR2(80);
-  v_countgeneral NUMBER;
-  v_out_mensaje VARCHAR2(400);
-  v_query_count VARCHAR2(200);
-
-  e_tablanoparticionada EXCEPTION;
-
+p_schema VARCHAR2(40):= UPPER('&1.');
+v_countgeneral NUMBER(1);
+v_query_count VARCHAR2(120);
+v_objeto VARCHAR2(40);
 BEGIN
-  
-  v_tabla:='PINERR';
-  v_query_count := q'{SELECT COUNT(1) FROM all_tab_partitions WHERE table_owner= :1 AND table_name = :2}';
-  EXECUTE IMMEDIATE v_query_count INTO v_countgeneral USING p_schema,v_tabla;
-  IF v_countgeneral = 0 THEN
-  RAISE e_tablanoparticionada;
-  END IF;
-  
-    v_out_mensaje:= 'Resultado:';
 
-    EXECUTE IMMEDIATE 'ALTER SESSION SET NLS_TIMESTAMP_FORMAT = ''YYYY-MM-DD''';
-    EXECUTE IMMEDIATE 'ALTER SESSION SET NLS_DATE_FORMAT = ''YYYY-MM-DD''';
-    v_sql_ddl:='ALTER TABLE';
-    v_sql_idx:='ALTER INDEX';
-    v_sql_rename:='RENAME TO';
-    v_tabla:='PINERR';
-    v_tabla_leg:='PINERR_LEG';
-    v_tabla_legacy:='PINERR_LEGACY';
-
-    --Particionada a LEG
-    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla||' '||v_sql_rename||' '||v_tabla_leg; 
-    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla_leg||' RENAME CONSTRAINT PK_PAN TO PK_PAN_LEG'; 
-    EXECUTE IMMEDIATE v_sql_idx||' '||p_schema||'.PK_PAN RENAME TO PK_PAN_LEG';
-    --Legacy a Regular
-    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla_legacy||'  '||v_sql_rename||' '||v_tabla||''; 
-    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla||' RENAME CONSTRAINT PK_PAN_LEGACY TO PK_PAN'; 
-    EXECUTE IMMEDIATE v_sql_idx||' '||p_schema||'.PK_PAN_LEGACY RENAME TO PK_PAN'; 
-    --LEG a Legacy
-    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla_leg||' '||v_sql_rename||' '||v_tabla_legacy; 
-    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla_legacy||' RENAME CONSTRAINT PK_PAN_LEG TO PK_PAN_LEGACY'; 
-    EXECUTE IMMEDIATE v_sql_idx||' '||p_schema||'.PK_PAN_LEG RENAME TO PK_PAN_LEGACY';
-
-    v_out_mensaje:= v_out_mensaje||''||CHR(10)||'OK: Se realizo Rollback para la Tabla '||v_tabla||' Particionada';
-
-  v_tabla:='THPINERR';
-  v_tabla_leg:='THPINERR_LEG';
-  v_tabla_legacy:='THPINERR_LEGACY';
-
-  v_query_count := q'{SELECT COUNT(1) FROM all_tab_partitions WHERE table_owner= :1 AND table_name = :2}';
-  EXECUTE IMMEDIATE v_query_count INTO v_countgeneral USING p_schema,v_tabla;
-  IF v_countgeneral = 0 THEN
-  RAISE e_tablanoparticionada;
+  v_objeto := 'TP_PART_CONF';
+  v_query_count := q'{SELECT NVL(0,1) FROM all_tables WHERE owner = :1 AND table_name = :2}';
+  EXECUTE IMMEDIATE v_countgeneral INTO v_exist USING p_schema,v_objeto;
+  IF v_countgeneral=0 THEN
+        EXECUTE IMMEDIATE 'DROP TABLE &1..TP_PART_CONF PURGE';
+        DBMS_OUTPUT.PUT_LINE('INFO: Se dropeo TP_PART_CONF');
   END IF;
 
-    --Particionada a LEGACY
-    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla||' RENAME TO '||v_tabla_legacy||''; 
-    EXECUTE IMMEDIATE v_sql_ddl||' '||p_schema||'.'||v_tabla_legacy||' RENAME CONSTRAINT PK_THPAN TO PK_THPAN_LEGACY';
-    EXECUTE IMMEDIATE v_sql_idx||' '||p_schema||'.PK_THPAN RENAME TO PK_THPAN_LEGACY';
-    v_out_mensaje:= v_out_mensaje||''||CHR(10)||'OK: Se realizo Rollback para la Tabla TH'||v_tabla||' Particionada';
-    
-    DBMS_OUTPUT.PUT_LINE(v_out_mensaje);
+  v_objeto := 'TP_PART_LOG';
+  v_query_count := q'{SELECT NVL(0,1) FROM all_tables WHERE owner = :1 AND table_name = :2}';
+  EXECUTE IMMEDIATE v_countgeneral INTO v_exist USING p_schema,v_objeto;
+  IF v_countgeneral=0 THEN
+        EXECUTE IMMEDIATE 'DROP TABLE &1..TP_PART_CONF PURGE';
+        DBMS_OUTPUT.PUT_LINE('INFO: Se dropeo TP_PART_CONF');
+  END IF;
+
+  v_objeto := 'SEQ_PART_LOG';
+  v_query_count := q'{SELECT NVL(0,1) FROM all_sequences WHERE sequence_owner = :1 AND sequence_name = :2}';
+  EXECUTE IMMEDIATE v_countgeneral INTO v_exist USING p_schema,v_objeto;
+  IF v_countgeneral=0 THEN
+        EXECUTE IMMEDIATE 'DROP TABLE &1..TP_PART_CONF PURGE';
+        DBMS_OUTPUT.PUT_LINE('INFO: Se dropeo TP_PART_CONF');
+  END IF;
 
 EXCEPTION
-  WHEN e_tablanoparticionada THEN
-        DBMS_OUTPUT.PUT_LINE('ERROR: La Tabla '||v_tabla||' no esta particionada');
-  WHEN OTHERS THEN 
-    DBMS_OUTPUT.PUT_LINE(v_out_mensaje||''||CHR(10)||'ERROR: Rollback Tabla '||v_tabla||' Particionada: '||SQLERRM);
-    return;
+   WHEN OTHERS THEN
+      DBMS_OUTPUT.PUT_LINE('ERROR: Dropeo de objeto '||v_objeto||' '|| SQLERRM);
 END;
 /
+
+
+CREATE TABLE &1..TP_PART_CONF (
+    COD_PART_CONF           VARCHAR2(10) NOT NULL,
+    NOM_TABLA               VARCHAR2(50) NOT NULL,
+    NOM_THTABLA             VARCHAR2(50),
+    NOM_CAMPO_FECHA_PART    VARCHAR2(50) NOT NULL,
+    TIP_CAMPO_FECHA_PART    VARCHAR2(30) NOT NULL,
+    NUM_PART_ATRAS          NUMBER(2),
+    NUM_PART_ADELANTE       NUMBER(2),
+    NUM_THPART_ATRAS        NUMBER(2),
+    NUM_THPART_ADELANTE     NUMBER(2),
+    FLG_MOVEDATATH          VARCHAR2(2), 
+    FLG_FK                  VARCHAR2(2) NOT NULL,
+    NOM_FK                  VARCHAR2(30),
+    COD_PART_CONFDEP        VARCHAR2(10),
+    TIP_PERIODO             VARCHAR2(10),
+    NOM_TBSDATOS            VARCHAR2(30) NOT NULL,
+    NOM_TBSIDX              VARCHAR2(30) NOT NULL,
+    FLG_PAM                 VARCHAR2(2),
+    ESTADO_EJECUCION        NUMBER(1) ---0 se ejecuta
+) TABLESPACE &2.;
+
+CREATE TABLE &1..TP_PART_LOG
+    (   COD_PART_LOG        NUMBER(27),
+        TIP_PART_LOG        NUMBER(1),
+        DESC_TIP_PART_LOG   VARCHAR2(20),
+        DESC_PART_LOG       VARCHAR2(600),
+        NOM_PROCEDURE       VARCHAR2(20),
+        NOM_TABLA           VARCHAR2(20),
+        FEC_CREA            TIMESTAMP(6),
+        USU_CREA            VARCHAR2(50)
+    ) TABLESPACE &2.;
+
+CREATE SEQUENCE &1..SEQ_PART_LOG INCREMENT BY 1 START WITH 1 MAXVALUE 999999999999999999999999999 MINVALUE 1 CACHE 50;
+
 
 spool off
 exit

@@ -87,7 +87,7 @@ BEGIN
           v_tabla := my_array(i);
           v_tabla_legacy:= my_array(i)||'_LEGACY';
 
-          IF v_tabla='TXNLOG' THEN
+          IF v_tabla=my_array(1) THEN
           EXECUTE IMMEDIATE v_sql_ddlt||' '||p_schema||'.'||v_tabla||' RENAME TO '||v_tabla_legacy; 
           EXECUTE IMMEDIATE v_sql_ddlt||' '||p_schema||'.'||v_tabla_legacy||' RENAME CONSTRAINT PK_TXNLOG TO PK_TXNLOG_LEGACY'; 
           
@@ -241,7 +241,7 @@ BEGIN
 
           EXECUTE IMMEDIATE v_sql;
 
-      IF v_tabla='THTXNLOG' THEN
+      IF v_tabla=my_array(2) THEN
        -- CREATE/RECREATE primary, unique and foreign key constraints
           EXECUTE IMMEDIATE v_sql_ddlt||' '||p_schema||'.'||v_tabla||' ADD CONSTRAINT "PK_THTXNLOG" PRIMARY KEY ("MSGTYPE", "PAN", "PRCODE", "AMOUNT_TXN", "TRACE", "TIME_LOCAL", "DATE_LOCAL", "POINT_COND_CODE", "ACQ_INST", "TERM_ID") USING INDEX TABLESPACE '||p_tbs_indice;
        -- CREATE/RECREATE INDEXES
@@ -249,7 +249,7 @@ BEGIN
       END IF;
 
 
-      IF v_tabla='TXNLOG' THEN
+      IF v_tabla=my_array(1) THEN
 
        -- CREATE/RECREATE primary, unique and foreign key constraints
           EXECUTE IMMEDIATE v_sql_ddlt||' '||p_schema||'.'||v_tabla||' ADD CONSTRAINT "PK_TXNLOG" PRIMARY KEY ("MSGTYPE", "PAN", "PRCODE", "AMOUNT_TXN", "TRACE", "TIME_LOCAL", "DATE_LOCAL", "POINT_COND_CODE", "ACQ_INST", "TERM_ID") USING INDEX TABLESPACE '||p_tbs_indice;

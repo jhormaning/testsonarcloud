@@ -20,7 +20,7 @@ DECLARE
   v_out_mensaje VARCHAR2(400);
   TYPE varchar2_array IS VARRAY(2) OF VARCHAR2(30);
   my_array varchar2_array;
-
+  idx INTEGER := 1;
   e_schemanovalido          EXCEPTION;
   e_tbsdatonovalido       EXCEPTION;
   e_tbsindicenovalido     EXCEPTION;
@@ -82,7 +82,7 @@ BEGIN
 
   my_array := varchar2_array('TXNLOG', 'THTXNLOG');
 
-  FOR i IN 1 .. my_array.COUNT LOOP
+  WHILE idx <= my_array.COUNT LOOP
 
           v_tabla := my_array(i);
           v_tabla_legacy:= my_array(i)||'_LEGACY';
@@ -241,7 +241,7 @@ BEGIN
 
           EXECUTE IMMEDIATE v_sql;
 
-      IF v_tabla='TXNLOG' THEN
+      IF v_tabla='THTXNLOG' THEN
        -- CREATE/RECREATE primary, unique and foreign key constraints
           EXECUTE IMMEDIATE v_sql_ddlt||' '||p_schema||'.'||v_tabla||' ADD CONSTRAINT "PK_THTXNLOG" PRIMARY KEY ("MSGTYPE", "PAN", "PRCODE", "AMOUNT_TXN", "TRACE", "TIME_LOCAL", "DATE_LOCAL", "POINT_COND_CODE", "ACQ_INST", "TERM_ID") USING INDEX TABLESPACE '||p_tbs_indice;
        -- CREATE/RECREATE INDEXES
@@ -415,7 +415,7 @@ BEGIN
          EXECUTE IMMEDIATE 'COMMENT ON TABLE '||p_schema||'.'||v_tabla||'  IS ''Esta tabla contiene el registro de todas las transacciones que han circulado por la red.''';
       END IF; 
       v_out_mensaje:= v_out_mensaje||''||CHR(10)||'OK: Tabla '||v_tabla||' Particionada creada';
-
+      idx := idx + 1; 
 END LOOP;
 
     DBMS_OUTPUT.PUT_LINE(v_out_mensaje);

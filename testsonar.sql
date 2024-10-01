@@ -14,16 +14,16 @@ BEGIN
   v_query_count := q'{SELECT NVL(0,1) FROM all_tables WHERE owner = :1 AND table_name = :2}';
   EXECUTE IMMEDIATE v_query_count INTO v_countgeneral USING p_schema,v_objeto;
   IF v_countgeneral=0 THEN
-        EXECUTE IMMEDIATE 'DROP TABLE &1..TP_PART_CONF PURGE';
-        DBMS_OUTPUT.PUT_LINE('INFO: Se dropeo TP_PART_CONF');
+        EXECUTE IMMEDIATE 'DROP TABLE '||p_schema||'.'||v_objeto||' PURGE';
+        DBMS_OUTPUT.PUT_LINE('INFO: Tabla dropeada '||v_objeto);
   END IF;
 
   v_objeto := 'TP_PART_LOG';
   v_query_count := q'{SELECT NVL(0,1) FROM all_tables WHERE owner = :1 AND table_name = :2}';
   EXECUTE IMMEDIATE v_query_count INTO v_countgeneral USING p_schema,v_objeto;
   IF v_countgeneral=0 THEN
-        EXECUTE IMMEDIATE 'DROP TABLE &1..TP_PART_CONF PURGE';
-        DBMS_OUTPUT.PUT_LINE('INFO: Se dropeo TP_PART_CONF');
+        EXECUTE IMMEDIATE 'DROP TABLE '||p_schema||'.'||v_objeto||' PURGE';
+        DBMS_OUTPUT.PUT_LINE('INFO: Se dropeo '||v_objeto);
   END IF;
 
   v_objeto := 'SEQ_PART_LOG';
@@ -31,7 +31,7 @@ BEGIN
   EXECUTE IMMEDIATE v_query_count INTO v_countgeneral USING p_schema,v_objeto;
   IF v_countgeneral=0 THEN
         EXECUTE IMMEDIATE 'DROP TABLE &1..TP_PART_CONF PURGE';
-        DBMS_OUTPUT.PUT_LINE('INFO: Se dropeo TP_PART_CONF');
+        DBMS_OUTPUT.PUT_LINE('INFO: Sequencia dropeada  '||v_objeto);
   END IF;
 
 EXCEPTION

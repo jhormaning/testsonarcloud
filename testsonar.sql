@@ -1,6 +1,3 @@
---01CreacionDMLMTTOPART
---Crear un packete para agregar o dropear particiones en la tablas del schema
--- &1 : Schema OLC
 SET SERVEROUTPUT ON
 spool 01CreacionDMLMTTOPART.log
 
@@ -147,16 +144,16 @@ PROCEDURE SPI_PART_LOG (
     p_nom_tabla IN VARCHAR2
 ) IS
 BEGIN
-    EXECUTE IMMEDIATE 'INSERT INTO "' || p_schema || '"."TP_PART_LOG" 
-                       (COD_PART_LOG, TIP_PART_LOG, DESC_TIP_PART_LOG, DESC_PART_LOG, 
-                        NOM_PROCEDURE, NOM_TABLA, FEC_CREA, USU_CREA) 
-                       VALUES (SEQ_PART_LOG.NEXTVAL, :1, :2, :3, :4, :5, SYSTIMESTAMP, :6)' 
+    EXECUTE IMMEDIATE 'INSERT INTO "' || p_schema || '"."TP_PART_LOG" '||
+                       '(COD_PART_LOG, TIP_PART_LOG, DESC_TIP_PART_LOG, DESC_PART_LOG, '||
+                       'NOM_PROCEDURE, NOM_TABLA, FEC_CREA, USU_CREA) '||
+                       'VALUES (SEQ_PART_LOG.NEXTVAL, :1, :2, :3, :4, :5, SYSTIMESTAMP, :6)' 
     USING p_tip_part_log, p_desc_tip_part_log, 
           p_desc_part_log, p_nom_procedure, 
           p_nom_tabla, p_schema;  -- Usar el nombre del esquema como USU_CREA
 EXCEPTION
     WHEN OTHERS THEN
-        DBMS_OUTPUT.PUT_LINE('Error: ' || SQLERRM);
+        DBMS_OUTPUT.PUT_LINE('SPI_PART_LOG: ' || SQLERRM);
 END SPI_PART_LOG;
 
 
@@ -309,21 +306,6 @@ END IF;
         p_sqlcode := CONST_CODE_OK;
         p_sqlerrm:= 'OK Fin ejecucion MANTENIMIENTO MENSUAL MAIN '||fecha_base;
 
-        -- Mostrar el contenido de cada campo de la fila
-       /* DBMS_OUTPUT.PUT_LINE('Producto: ' || v_fila.producto);
-        DBMS_OUTPUT.PUT_LINE('Tabla: ' || v_fila.NOM_TABLA);
-        DBMS_OUTPUT.PUT_LINE('Fecha de ParticiÃ³n: ' || v_fila.fecha_part);
-        DBMS_OUTPUT.PUT_LINE('Tipo de Fecha de ParticiÃ³n: ' || v_fila.TIP_CAMPO_FECHA_PART);
-        DBMS_OUTPUT.PUT_LINE('Flag Mover Historial: ' || v_fila.FLG_MOVEDATATH);
-        DBMS_OUTPUT.PUT_LINE('Tabla Historial: ' || v_fila.NOM_THTABLA);
-        DBMS_OUTPUT.PUT_LINE('Flag FK: ' || v_fila.flag_fk);
-        DBMS_OUTPUT.PUT_LINE('Detalle FK: ' || v_fila.det_fk);
-        DBMS_OUTPUT.PUT_LINE('Particiones Atras: ' || v_fila.NUM_PART_ATRAS);
-        DBMS_OUTPUT.PUT_LINE('Particiones Adelante: ' || v_fila.NUM_PART_ADELANTE);
-        DBMS_OUTPUT.PUT_LINE('Periodo: ' || v_fila.periodo);
-        DBMS_OUTPUT.PUT_LINE('Tablespace: ' || v_fila.NOM_TBSDATOS);
-        DBMS_OUTPUT.PUT_LINE('Flag PAM: ' || v_fila.flag_pam);
-        DBMS_OUTPUT.PUT_LINE('----------------------------------------');*/
     END LOOP;
     CLOSE cur_particiones;
 
@@ -346,10 +328,10 @@ EXCEPTION
 END SPP_MAIN_PART_MES_SIN_FK;
 
 
-/* ***************************************************************************************  */
-/* Nombre                : SPP_CREATE_PART_MES_SIN_FK                                    */
-/* Descripcion           : Permite agregar particiones mensuales a tablas transaccionales   */
-/* **************************************************************************************** */
+-- ***************************************************************************************  
+-- Nombre                : SPP_CREATE_PART_MES_SIN_FK                                    
+-- Descripcion           : Permite agregar particiones mensuales a tablas transaccionales   
+-- **************************************************************************************** 
 
 PROCEDURE SPP_CREATE_PART_MES_SIN_FK
   ( p_fecha_base        IN VARCHAR2,        
@@ -464,10 +446,10 @@ PROCEDURE SPP_CREATE_PART_MES_SIN_FK
 
 END SPP_CREATE_PART_MES_SIN_FK;
 
-/* ***************************************************************************************  */
-/* Nombre                : SPP_DROP_PART_MES_SIN_FK                                    */
-/* Descripcion           : Permite dropear particiones mensuales a tablas transaccionales   */
-/* **************************************************************************************** */
+-- ***************************************************************************************  
+-- Nombre                : SPP_DROP_PART_MES_SIN_FK                                    
+-- Descripcion           : Permite dropear particiones mensuales a tablas transaccionales   
+-- **************************************************************************************** 
 
 PROCEDURE SPP_DROP_PART_MES_SIN_FK(
   p_fecha_base       IN VARCHAR2,        
@@ -567,11 +549,11 @@ PROCEDURE SPP_DROP_PART_MES_SIN_FK(
       END IF;
 END SPP_DROP_PART_MES_SIN_FK;
 
-/* ***************************************************************************************  */
-/* Nombre                : SPI_INSERT_PART_SIN_FK                                               */
-/* Descripcion           : Permite insertar data de una particion de tabla transaccional    */
-/*                         a su tabla historica                                             */
-/* **************************************************************************************** */
+-- ***************************************************************************************  
+-- Nombre                : SPI_INSERT_PART_SIN_FK                                               
+-- Descripcion           : Permite insertar data de una particion de tabla transaccional    
+--                         a su tabla historica                                             
+-- **************************************************************************************** 
 PROCEDURE SPI_INSERT_PART_SIN_FK(
         p_fecha_base            IN VARCHAR2,
         p_schema                IN VARCHAR2,
@@ -744,10 +726,10 @@ PROCEDURE SPI_INSERT_PART_SIN_FK(
         ROLLBACK;
     END SPI_INSERT_PART_SIN_FK;
 
-/* ***************************************************************************************  */
-/* Nombre                : SPU_INDEXESLOGGING                                            */
-/* Descripcion           : Permite obtener el nombre de la llave primaria                   */
-/* **************************************************************************************** */
+-- ***************************************************************************************  
+-- Nombre                : SPU_INDEXESLOGGING                                            
+-- Descripcion           : Permite obtener el nombre de la llave primaria                   
+-- **************************************************************************************** 
 PROCEDURE SPU_INDEXESLOGGING (
     p_schema IN VARCHAR2,
     p_table_name IN VARCHAR2
@@ -769,13 +751,13 @@ BEGIN
 
 EXCEPTION
     WHEN OTHERS THEN
-        DBMS_OUTPUT.PUT_LINE('Error: ' || SQLERRM);
+        DBMS_OUTPUT.PUT_LINE('SPU_INDEXESLOGGING: ' || SQLERRM);
 END SPU_INDEXESLOGGING;
 
-/* ***************************************************************************************  */
-/* Nombre                : SPU_INDEXESNOLOGGING                                            */
-/* Descripcion           : Permite obtener el nombre de la llave primaria                   */
-/* **************************************************************************************** */
+-- ***************************************************************************************  
+-- Nombre                : SPU_INDEXESNOLOGGING                                            
+-- Descripcion           : Permite obtener el nombre de la llave primaria                   
+-- **************************************************************************************** 
 PROCEDURE SPU_INDEXESNOLOGGING (
     p_schema IN VARCHAR2,
     p_table_name IN VARCHAR2
@@ -797,13 +779,13 @@ BEGIN
 
 EXCEPTION
     WHEN OTHERS THEN
-        DBMS_OUTPUT.PUT_LINE('Error: ' || SQLERRM);
+        DBMS_OUTPUT.PUT_LINE('SPU_INDEXESNOLOGGING: ' || SQLERRM);
 END SPU_INDEXESNOLOGGING;
 
-/* ***************************************************************************************  */
-/* Nombre                : FUN_obtener_primer_dia_particion                                            */
-/* Descripcion           : Permite obtener el nombre de la llave primaria                   */
-/* **************************************************************************************** */
+-- ***************************************************************************************  
+-- Nombre                : FUN_obtener_primer_dia_particion                                            
+-- Descripcion           : Permite obtener el nombre de la llave primaria                   
+-- **************************************************************************************** 
 
 FUNCTION FUN_obtener_primer_dia_particion(
     nombre_particion IN VARCHAR2
@@ -821,10 +803,10 @@ EXCEPTION
 END FUN_obtener_primer_dia_particion;
 
 
-/* ***************************************************************************************  */
-/* Nombre                : FUN_obtener_ultimo_dia_particion                                            */
-/* Descripcion           : Permite obtener el nombre de la llave primaria                   */
-/* **************************************************************************************** */
+-- ***************************************************************************************  
+-- Nombre                : FUN_obtener_ultimo_dia_particion                                            
+-- Descripcion           : Permite obtener el nombre de la llave primaria                   
+-- **************************************************************************************** 
 
 FUNCTION FUN_obtener_ultimo_dia_particion(
     nombre_particion IN VARCHAR2
@@ -843,10 +825,10 @@ EXCEPTION
 END FUN_obtener_ultimo_dia_particion;
 
 
-/* ***************************************************************************************  */
-/* Nombre                : SPS_obtener_particiones                                            */
-/* Descripcion           : Obtiene las particiones en un rango de fechas                   */
-/* **************************************************************************************** */
+-- ***************************************************************************************  
+-- Nombre                : SPS_obtener_particiones                                            
+-- Descripcion           : Obtiene las particiones en un rango de fechas                   
+-- **************************************************************************************** 
 
 PROCEDURE SPS_obtener_particiones(
     fecha_inicio IN TIMESTAMP,
@@ -873,10 +855,10 @@ BEGIN
 
 END SPS_obtener_particiones;
 
-/* ***************************************************************************************  */
-/* Nombre                : FUN_obt_min_fecha_partxn_times                                  */
-/* Descripcion           : Permite obtener la minima fecha con data en una particion       */
-/* **************************************************************************************** */
+-- ***************************************************************************************  
+-- Nombre                : FUN_obt_min_fecha_partxn_times                                  
+-- Descripcion           : Permite obtener la minima fecha con data en una particion       
+-- **************************************************************************************** 
 
 FUNCTION FUN_obt_min_fecha_partxn_times(
     p_table_name    IN VARCHAR2,  
@@ -908,10 +890,10 @@ EXCEPTION
         RETURN v_partition_date;
 END FUN_obt_min_fecha_partxn_times;
 
-/* ***************************************************************************************  */
-/* Nombre                : FUN_obt_max_fecha_parth_times                                    */
-/* Descripcion           : Permite obtener la maxima fecha con data en una particion historica */
-/* **************************************************************************************** */
+-- ***************************************************************************************  
+-- Nombre                : FUN_obt_max_fecha_parth_times                                    
+-- Descripcion           : Permite obtener la maxima fecha con data en una particion historica 
+-- **************************************************************************************** 
 
 FUNCTION FUN_obt_max_fecha_parth_times(
     p_table_name    IN VARCHAR2,  
@@ -946,10 +928,10 @@ EXCEPTION
         RETURN v_partition_date;
 END FUN_obt_max_fecha_parth_times;
 
-/* ***************************************************************************************  */
-/* Nombre                : FUN_obt_max_fecha_partxn_times                                   */
-/* Descripcion           : Permite obtener la maxima fecha con data en una particion txn    */
-/* **************************************************************************************** */
+-- ***************************************************************************************  
+-- Nombre                : FUN_obt_max_fecha_partxn_times                                   
+-- Descripcion           : Permite obtener la maxima fecha con data en una particion txn    
+-- **************************************************************************************** 
 
 FUNCTION FUN_obt_max_fecha_partxn_times(
     p_table_name    IN VARCHAR2,  
@@ -976,10 +958,10 @@ EXCEPTION
         RETURN v_partition_date;
 END FUN_obt_max_fecha_partxn_times;
 
-/* ***************************************************************************************  */
-/* Nombre                : FUN_obt_primer_part                                              */
-/* Descripcion           : Permite obtener la primera Particion con data                    */
-/* **************************************************************************************** */
+-- ***************************************************************************************  
+-- Nombre                : FUN_obt_primer_part                                              
+-- Descripcion           : Permite obtener la primera Particion con data                    
+-- **************************************************************************************** 
 
 FUNCTION FUN_obt_primer_part(p_table_name IN VARCHAR2)
 RETURN VARCHAR2
@@ -1009,10 +991,10 @@ EXCEPTION
     WHEN OTHERS THEN
         RETURN NULL;
 END FUN_obt_primer_part;
-/* ***************************************************************************************  */
-/* Nombre                : FUN_obt_actual_part                                                   */
-/* Descripcion           : Permite obtener el nombre de la particion actual                   */
-/* **************************************************************************************** */
+-- ***************************************************************************************  
+-- Nombre                : FUN_obt_actual_part                                                   
+-- Descripcion           : Permite obtener el nombre de la particion actual                   
+-- **************************************************************************************** 
 
 FUNCTION FUN_obt_actual_part(p_table_name IN VARCHAR2)
 RETURN VARCHAR2
@@ -1044,10 +1026,10 @@ EXCEPTION
 END FUN_obt_actual_part;
 
 
-/* ***************************************************************************************  */
-/* Nombre                : fun_obtener_ultima_particion                                    */
-/* Descripcion           : Permite obtener la ultima particion   */
-/* **************************************************************************************** */
+-- ***************************************************************************************  
+-- Nombre                : fun_obtener_ultima_particion                                    
+-- Descripcion           : Permite obtener la ultima particion   
+-- **************************************************************************************** 
 
 FUNCTION fun_obtener_ultima_particion(p_name_table IN VARCHAR2)
 RETURN VARCHAR2
@@ -1066,10 +1048,10 @@ EXCEPTION
    WHEN OTHERS THEN
       RAISE;  
 END fun_obtener_ultima_particion;
-/* ***************************************************************************************  */
-/* Nombre                : fun_obtener_primera_particion                                    */
-/* Descripcion           : Permite obtener la primera particion                              */
-/* **************************************************************************************** */
+-- ***************************************************************************************  
+-- Nombre                : fun_obtener_primera_particion                                    
+-- Descripcion           : Permite obtener la primera particion                              
+-- **************************************************************************************** 
 
 FUNCTION fun_obtener_primera_particion(p_name_table IN VARCHAR2)
 RETURN VARCHAR2
@@ -1089,10 +1071,10 @@ EXCEPTION
       RAISE;  
 END fun_obtener_primera_particion;
 
-/* ***************************************************************************************  */
-/* Nombre                : FUN_validar_particion_existente                                                  */
-/* Descripcion           : Verifica si una particion existe                                  */
-/* **************************************************************************************** */
+-- ***************************************************************************************  
+-- Nombre                : FUN_validar_particion_existente                                                  
+-- Descripcion           : Verifica si una particion existe                                  
+-- **************************************************************************************** 
 
 FUNCTION FUN_validar_particion_existente(
     p_table_name IN VARCHAR2,
@@ -1110,10 +1092,10 @@ EXCEPTION
         RETURN FALSE;  
 END FUN_validar_particion_existente;
 
-/* ***************************************************************************************  */
-/* Nombre                : sleep_time                                                        */
-/* Descripcion           : Brinda tiempo de ejecucion al package                             */
-/* **************************************************************************************** */
+-- ***************************************************************************************  
+-- Nombre                : sleep_time                                                        
+-- Descripcion           : Brinda tiempo de ejecucion al package                             
+-- **************************************************************************************** 
     PROCEDURE sleep_time
     IS
       start_time TIMESTAMP:=SYSTIMESTAMP;

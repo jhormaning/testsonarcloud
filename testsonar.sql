@@ -1,443 +1,1135 @@
+--01CreacionDMLMTTOPART
+--Crear un packete para agregar o dropear particiones en la tablas del schema
+-- &1 : Schema OLC
 SET SERVEROUTPUT ON
-spool 80PatchEFT20240930CreatePartitionTxnlog.log
+spool 01CreacionDMLMTTOPART.log
 
-DECLARE
-  p_schema VARCHAR2(30) := UPPER('&1.');
-  p_tbs_dato VARCHAR2(50) := UPPER('&2.');
-  p_tbs_indice VARCHAR2(50) := UPPER('&3.');
-  p_partitions_antes NUMBER := &4-1; 
-  p_partitions_desp NUMBER := &5;
-  v_fecha_base date;
-  v_sql VARCHAR2(8000);
-  v_sql_ddlt VARCHAR2(20);
-  v_sql_ddli VARCHAR2(20);
-  v_sql_ddlc VARCHAR2(20);
-  v_sql_ddlci VARCHAR2(20);
+create or replace  PACKAGE          &1..PKG_MTTOPART AS
+
+
+CONST_CODE_OK CONSTANT NUMBER := 0;
+CONST_CODE_ERROR CONSTANT NUMBER := -1;
+CONST_CODE_NOPARTITION CONSTANT NUMBER := 1;
+CONST_CODE_LOCK CONSTANT NUMBER := 2;
+V_MAX_RETRIES  NUMBER:= 10;
+V_RETRY_COUNT NUMBER:= 0;
+
+type data_rec is record (pl   VARCHAR2(100));
+type nombre_particiones_array is table of data_rec;
+
+PROCEDURE SPP_MAIN_PART_MES_SIN_FK (
+p_sqlcode           OUT NUMBER,
+p_sqlerrm           OUT VARCHAR2);
+
+PROCEDURE SPP_CREATE_PART_MES_SIN_FK
+(
+p_fecha_base        IN VARCHAR2,        
+p_num_meses         IN NUMBER,          
+p_tablespace        IN VARCHAR2,       
+p_name_table        IN VARCHAR2,
+p_tipo_campodate    IN VARCHAR2,
+p_sqlcode           OUT NUMBER,
+p_sqlerrm           OUT VARCHAR2
+);
+
+PROCEDURE SPP_DROP_PART_MES_SIN_FK(
+p_fecha_base       IN VARCHAR2,        
+p_num_meses        IN NUMBER,         
+p_name_table       IN VARCHAR2,
+p_sqlcode          OUT NUMBER,
+p_sqlerrm          OUT VARCHAR2);
+
+
+PROCEDURE sleep_time;
+
+PROCEDURE SPI_INSERT_PART_SIN_FK(
+        p_fecha_base            IN VARCHAR2,
+        p_schema                IN VARCHAR2,        
+        p_table_name            IN VARCHAR2,
+        p_table_name_his        IN VARCHAR2,
+        p_campo_fecha           IN VARCHAR2,
+        p_tipo_fecha            IN VARCHAR2,
+
+       -- p_arr_errores           IN v_array,
+       -- p_num_reintentos        IN INTEGER,
+        p_sqlcode           OUT NUMBER,
+        p_sqlerrm           OUT VARCHAR2
+    );
+
+FUNCTION FUN_obtener_primer_dia_particion(
+    nombre_particion IN VARCHAR2
+) RETURN TIMESTAMP;
+
+
+FUNCTION FUN_obtener_ultimo_dia_particion(
+    nombre_particion IN VARCHAR2
+) RETURN TIMESTAMP;
+
+PROCEDURE SPU_INDEXESNOLOGGING (
+    p_schema IN VARCHAR2,
+    p_table_name IN VARCHAR2
+);
+
+PROCEDURE SPU_INDEXESLOGGING (
+    p_schema IN VARCHAR2,
+    p_table_name IN VARCHAR2
+);
+
+
+PROCEDURE SPS_obtener_particiones(
+    fecha_inicio IN TIMESTAMP,
+    fecha_fin IN TIMESTAMP,
+    nombre_tabla IN VARCHAR2,
+    particiones IN OUT nombre_particiones_array  
+) ;
+
+
+FUNCTION FUN_obt_max_fecha_partxn_times(
+    p_table_name    IN VARCHAR2,  
+    p_partition_name IN VARCHAR2, 
+    p_fecha_field   IN VARCHAR2,
+    p_tipo_fecha    IN VARCHAR2
+) RETURN TIMESTAMP;
+
+FUNCTION FUN_obt_actual_part(p_table_name IN VARCHAR2)
+RETURN VARCHAR2;
+
+FUNCTION fun_obtener_ultima_particion(p_name_table IN VARCHAR2)
+RETURN VARCHAR2;
+
+FUNCTION fun_obtener_primera_particion(p_name_table IN VARCHAR2)
+RETURN VARCHAR2;
+
+FUNCTION FUN_obt_min_fecha_partxn_times(
+    p_table_name    IN VARCHAR2,  
+    p_partition_name IN VARCHAR2, 
+    p_fecha_field   IN VARCHAR2,
+    p_tipo_fecha    IN VARCHAR2
+) RETURN TIMESTAMP;
+
+FUNCTION FUN_obt_max_fecha_parth_times(
+    p_table_name    IN VARCHAR2,  
+    p_partition_name IN VARCHAR2, 
+    p_fecha_field   IN VARCHAR2,
+    p_tipo_fecha    IN VARCHAR2
+) RETURN TIMESTAMP;
+
+FUNCTION FUN_obt_primer_part(p_table_name IN VARCHAR2)
+RETURN VARCHAR2;
+
+
+FUNCTION FUN_validar_particion_existente(
+    p_table_name IN VARCHAR2,
+    p_partition_name IN VARCHAR2
+) RETURN BOOLEAN ;
+
+
+PROCEDURE SPI_PART_LOG (
+    p_schema IN VARCHAR2,
+    p_tip_part_log IN VARCHAR2,
+    p_desc_tip_part_log IN VARCHAR2,
+    p_desc_part_log IN VARCHAR2,
+    p_nom_procedure IN VARCHAR2,
+    p_nom_tabla IN VARCHAR2
+);
+
+END PKG_MTTOPART;
+/
+
+create or replace PACKAGE BODY   &1..PKG_MTTOPART AS
+
+PROCEDURE SPI_PART_LOG (
+    p_schema IN VARCHAR2,
+    p_tip_part_log IN VARCHAR2,
+    p_desc_tip_part_log IN VARCHAR2,
+    p_desc_part_log IN VARCHAR2,
+    p_nom_procedure IN VARCHAR2,
+    p_nom_tabla IN VARCHAR2
+) IS
+BEGIN
+    EXECUTE IMMEDIATE 'INSERT INTO "' || p_schema || '"."TP_PART_LOG" 
+                       (COD_PART_LOG, TIP_PART_LOG, DESC_TIP_PART_LOG, DESC_PART_LOG, 
+                        NOM_PROCEDURE, NOM_TABLA, FEC_CREA, USU_CREA) 
+                       VALUES (SEQ_PART_LOG.NEXTVAL, :1, :2, :3, :4, :5, SYSTIMESTAMP, :6)' 
+    USING p_tip_part_log, p_desc_tip_part_log, 
+          p_desc_part_log, p_nom_procedure, 
+          p_nom_tabla, p_schema;  -- Usar el nombre del esquema como USU_CREA
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('Error: ' || SQLERRM);
+END SPI_PART_LOG;
+
+
+PROCEDURE SPP_MAIN_PART_MES_SIN_FK (
+p_sqlcode           OUT NUMBER,
+p_sqlerrm           OUT VARCHAR2)
+AS
+  v_fila TP_PART_CONF%ROWTYPE;
+  CURSOR cur_particiones IS SELECT * FROM TP_PART_CONF;
+  v_tabla VARCHAR2(40);
+  v_tablespace VARCHAR2(40);
+  fecha_base VARCHAR2(8);
+  v_query_count VARCHAR2(400);
   v_countgeneral NUMBER;
-  v_tabla VARCHAR2(30);
-  v_tabla_legacy VARCHAR2(50);
-  v_query_count VARCHAR2(200);
-  v_out_mensaje VARCHAR2(400);
-  TYPE varchar2_array IS VARRAY(2) OF VARCHAR2(30);
-  my_array varchar2_array;
-  idx INTEGER := 1;
-  e_schemanovalido          EXCEPTION;
-  e_tbsdatonovalido       EXCEPTION;
-  e_tbsindicenovalido     EXCEPTION;
-  e_tablanoexiste     EXCEPTION;
-  e_tablaparticionada EXCEPTION;
-  e_num_meses EXCEPTION;
+  v_schema VARCHAR2(50);
+  e_finalizar               EXCEPTION;
+  e_tablanoparticionada     EXCEPTION;
+  e_tbsdatonovalido         EXCEPTION;
+  v_procedure VARCHAR2(24) :='SPP_MAIN_PART_MES_SIN_FK';
+
 BEGIN
 
-  v_query_count := q'{SELECT COUNT(1) FROM ALL_USERS WHERE USERNAME= :1}';
-  EXECUTE IMMEDIATE v_query_count INTO v_countgeneral USING p_schema;
-  IF v_countgeneral=0 THEN
-  RAISE e_schemanovalido;
-  END IF;
+  EXECUTE IMMEDIATE 'ALTER SESSION SET NLS_TIMESTAMP_FORMAT = ''YYYYMMDD HH24MISS''';
+  EXECUTE IMMEDIATE 'ALTER SESSION SET NLS_DATE_FORMAT = ''YYYYMMDD''';
+  fecha_base :=TO_CHAR(sysdate,'YYYYMMDD');
+  SELECT UPPER(USER) INTO v_schema FROM dual;
 
-  v_query_count := q'{SELECT COUNT(1) FROM USER_TABLESPACES WHERE tablespace_name= :1}';
-  EXECUTE IMMEDIATE v_query_count INTO v_countgeneral USING p_tbs_dato;
-  IF v_countgeneral=0 THEN
-  RAISE e_tbsdatonovalido;
-  END IF;
+  SPI_PART_LOG(v_schema,CONST_CODE_OK,'OK','************Inicio ejecucion MANTENIMIENTO MENSUAL MAIN '||fecha_base||' ************',v_procedure,'******'); COMMIT;
 
-  v_query_count := q'{SELECT COUNT(1) FROM USER_TABLESPACES WHERE tablespace_name= :1}';
-  EXECUTE IMMEDIATE v_query_count INTO v_countgeneral USING p_tbs_indice;
-  IF v_countgeneral=0 THEN
-  RAISE e_tbsindicenovalido;
-  END IF;
+OPEN cur_particiones;
+   LOOP
+      FETCH cur_particiones INTO v_fila;
+      EXIT WHEN cur_particiones%NOTFOUND;
 
-  IF p_partitions_antes <= 0 OR p_partitions_desp <= 0 THEN
-         RAISE e_num_meses;
-  END IF;
+        IF v_fila.ESTADO_EJECUCION <> 0 THEN
+         CONTINUE;
+        END IF;
 
-  v_tabla := 'TXNLOG';
-  v_query_count := q'{SELECT COUNT(1) FROM all_tables WHERE owner=:1 AND table_name = :2}';
-  EXECUTE IMMEDIATE v_query_count INTO v_countgeneral USING p_schema,v_tabla;
-  IF v_countgeneral=0 THEN
-  RAISE e_tablanoexiste;
-  END IF;
+        SPI_PART_LOG(v_fila.NOM_SCHEMA,CONST_CODE_OK,'OK','Inicio de validaciones ...',v_procedure,v_fila.NOM_TABLA); COMMIT;
 
-  v_query_count := q'{SELECT COUNT(1) FROM all_tab_partitions WHERE table_owner= :1 AND table_name = :2}';
-  EXECUTE IMMEDIATE v_query_count INTO v_countgeneral USING p_schema,v_tabla;
-  IF v_countgeneral <> 0 THEN
-  RAISE e_tablaparticionada;
-  END IF;
+        v_tablespace:=v_fila.NOM_TBSDATOS;
+        v_query_count := q'{SELECT COUNT(1) FROM USER_TABLESPACES WHERE tablespace_name= :1}';
+        EXECUTE IMMEDIATE v_query_count INTO v_countgeneral USING v_tablespace;
+        IF v_countgeneral=0 THEN
+        RAISE e_tbsdatonovalido;
+        END IF;
 
-  v_tabla := 'THTXNLOG';
-  v_query_count := q'{SELECT COUNT(1) FROM all_tab_partitions WHERE table_owner= :1 AND table_name = :2}';
-  EXECUTE IMMEDIATE v_query_count INTO v_countgeneral USING p_schema,v_tabla;
-  IF v_countgeneral <> 0 THEN
-  RAISE e_tablaparticionada;
-  END IF;
+        v_tabla:= v_fila.NOM_TABLA;
+        v_query_count := q'{SELECT COUNT(1) FROM all_tab_partitions WHERE table_owner= :1 AND table_name = :2}';
+        EXECUTE IMMEDIATE v_query_count INTO v_countgeneral USING v_fila.NOM_SCHEMA,v_tabla;
+        IF v_countgeneral = 0 THEN
+        RAISE e_tablanoparticionada;
+        END IF;
 
-    EXECUTE IMMEDIATE 'ALTER SESSION SET NLS_TIMESTAMP_FORMAT = ''YYYYMMDD''';
-    EXECUTE IMMEDIATE 'ALTER SESSION SET NLS_DATE_FORMAT = ''YYYYMMDD''';
-    v_out_mensaje:= 'Resultado:';
-    v_fecha_base:= sysdate;
-    v_sql_ddlt:= 'ALTER TABLE';
-    v_sql_ddli:= 'ALTER INDEX';
-    v_sql_ddlc:= 'COMMENT ON COLUMN';
-    v_sql_ddlci:= 'CREATE INDEX';
 
-  my_array := varchar2_array('TXNLOG', 'THTXNLOG');
+        p_sqlcode:=CONST_CODE_LOCK;
+        WHILE p_sqlcode=CONST_CODE_LOCK LOOP
+        SPP_CREATE_PART_MES_SIN_FK(fecha_base,v_fila.NUM_PART_ADELANTE,v_fila.NOM_TBSDATOS,
+        v_fila.NOM_TABLA,v_fila.TIP_CAMPO_FECHA_PART,p_sqlcode,p_sqlerrm);
 
-  WHILE idx <= my_array.COUNT LOOP
+        IF p_sqlcode = CONST_CODE_OK THEN
+        SPI_PART_LOG(v_fila.NOM_SCHEMA,CONST_CODE_OK,'OK','Fin ADD particiones en:'||v_fila.NOM_TABLA,v_procedure,v_fila.NOM_TABLA); COMMIT;
+        ELSIF p_sqlcode = CONST_CODE_NOPARTITION THEN
+          NULL;
+        ELSIF p_sqlcode = CONST_CODE_ERROR THEN
+          RAISE e_finalizar;
+        ELSIF p_sqlcode = CONST_CODE_LOCK THEN
+          sleep_time();
+        ELSE
+          RAISE e_finalizar;        
+        END IF;
+        END LOOP;
+        V_RETRY_COUNT:=0;
 
-          v_tabla := my_array(i);
-          v_tabla_legacy:= my_array(i)||'_LEGACY';
+        p_sqlcode:=CONST_CODE_LOCK;
+        WHILE p_sqlcode=CONST_CODE_LOCK LOOP
+        SPP_CREATE_PART_MES_SIN_FK(fecha_base,v_fila.NUM_THPART_ADELANTE,v_fila.NOM_TBSDATOS,
+        v_fila.NOM_THTABLA,v_fila.TIP_CAMPO_FECHA_PART,p_sqlcode,p_sqlerrm);
+        IF p_sqlcode = CONST_CODE_OK THEN
+        SPI_PART_LOG(v_fila.NOM_SCHEMA,CONST_CODE_OK,'OK','Fin ADD particiones en:'||v_fila.NOM_THTABLA,v_procedure,v_fila.NOM_THTABLA); COMMIT;
+        ELSIF p_sqlcode = CONST_CODE_NOPARTITION THEN
+          NULL;
+        ELSIF p_sqlcode = CONST_CODE_ERROR THEN
+          RAISE e_finalizar;
+        ELSIF p_sqlcode = CONST_CODE_LOCK THEN
+          sleep_time();
+        ELSE
+          RAISE e_finalizar;        
+        END IF;
+        END LOOP;
+        V_RETRY_COUNT:=0;
+        
+IF v_fila.FLG_MOVEDATATH = 'SI' THEN
+        p_sqlcode:=CONST_CODE_LOCK;
+        WHILE p_sqlcode=CONST_CODE_LOCK LOOP
+        SPI_INSERT_PART_SIN_FK(fecha_base,v_fila.NOM_SCHEMA,v_fila.NOM_TABLA,v_fila.NOM_THTABLA,v_fila.NOM_CAMPO_FECHA_PART,v_fila.TIP_CAMPO_FECHA_PART,     
+        p_sqlcode,p_sqlerrm);
 
-          IF v_tabla=my_array(1) THEN
-          EXECUTE IMMEDIATE v_sql_ddlt||' '||p_schema||'.'||v_tabla||' RENAME TO '||v_tabla_legacy; 
-          EXECUTE IMMEDIATE v_sql_ddlt||' '||p_schema||'.'||v_tabla_legacy||' RENAME CONSTRAINT PK_TXNLOG TO PK_TXNLOG_LEGACY'; 
-          
-          EXECUTE IMMEDIATE v_sql_ddli||' '||p_schema||'.PK_TXNLOG RENAME TO PK_TXNLOG_LEGACY'; 
-          EXECUTE IMMEDIATE v_sql_ddli||' '||p_schema||'.IDX_LOG_1 RENAME TO IDX_LOG_1_LEGACY'; 
-          END IF;
+        IF p_sqlcode = CONST_CODE_OK THEN
+        SPI_PART_LOG(v_fila.NOM_SCHEMA,CONST_CODE_OK,'OK','Fin Carga data de:'||v_fila.NOM_TABLA||' --> '||v_fila.NOM_THTABLA,v_procedure,v_fila.NOM_THTABLA); COMMIT;
+        ELSIF p_sqlcode = CONST_CODE_NOPARTITION THEN
+          NULL;
+        ELSIF p_sqlcode = CONST_CODE_ERROR THEN
+          RAISE e_finalizar;
+        ELSIF p_sqlcode = CONST_CODE_LOCK THEN
+          sleep_time();
+        ELSE
+          RAISE e_finalizar;        
+        END IF;
+        END LOOP;
+        V_RETRY_COUNT:=0;
+END IF;
 
-          v_sql := 'CREATE TABLE ' || p_schema || '.'||v_tabla||' (' ||
-                    'TIMEIN NUMBER(10,0), '||
-                    'TIMEOUT NUMBER(10,0), '||
-                    'STATUS NUMBER(4,0), '||
-                    'REVERSAL NUMBER(1,0), '||
-                    'WHO_RSP NUMBER(1,0), '||
-                    'REG_CONTROL VARCHAR2(12 BYTE), '||
-                    'FTE_APPL VARCHAR2(8 BYTE), '||
-                    'HEADER VARCHAR2(30 BYTE), '||
-                    'ORG_DRV NUMBER(2,0), '||
-                    'MSGTYPE NUMBER(4,0) NOT NULL ENABLE, '||
-                    'BM_PRIMARIO VARCHAR2(16 BYTE), '||
-                    'BM_SECUNDARIO VARCHAR2(16 BYTE), '||
-                    'PAN VARCHAR2(19 BYTE) NOT NULL ENABLE, '||
-                    'PRCODE NUMBER(6,0) NOT NULL ENABLE, '||
-                    'AMOUNT_TXN VARCHAR2(12 BYTE) NOT NULL ENABLE, '||
-                    'AMOUNT_STTL VARCHAR2(12 BYTE), '||
-                    'AMOUNT_CARDHOLD VARCHAR2(12 BYTE), '||
-                    'TRANSDATE VARCHAR2(8 BYTE), '||
-                    'TRANSTIME VARCHAR2(6 BYTE), '||
-                    'CONVRATE_STTL VARCHAR2(8 BYTE), '||
-                    'CONVRATE_CARDHOLD VARCHAR2(8 BYTE), '||
-                    'TRACE NUMBER(6,0) NOT NULL ENABLE, '||
-                    'TIME_LOCAL VARCHAR2(6 BYTE) NOT NULL ENABLE, '||
-                    'DATE_LOCAL VARCHAR2(8 BYTE) NOT NULL ENABLE, '||
-                    'DATE_EXP VARCHAR2(4 BYTE), '||
-                    'DATE_STTL VARCHAR2(8 BYTE), '||
-                    'DATE_CONV VARCHAR2(8 BYTE), '||
-                    'DATE_CAPTURE VARCHAR2(8 BYTE), '||
-                    'MERCHANT NUMBER(4,0), '||
-                    'ACQ_COUNTRY_CODE NUMBER(3,0), '||
-                    'PAN_EXT_COUNTRY_CODE NUMBER(3,0), '||
-                    'FORW_COUNTRY_CODE NUMBER(3,0), '||
-                    'POS_ENTRY_MODE NUMBER(3,0), '||
-                    'CARD_SEQ_NUM NUMBER(3,0), '||
-                    'NET_INTERNAT VARCHAR2(3 BYTE), '||
-                    'POINT_COND_CODE NUMBER(4,0) NOT NULL ENABLE, '||
-                    'POINT_CAP_CODE NUMBER(4,0), '||
-                    'AUTH_ID_RSP_LEN NUMBER(4,0), '||
-                    'AMT_TXN_FEE VARCHAR2(9 BYTE), '||
-                    'AMT_STTL_FEE VARCHAR2(9 BYTE), '||
-                    'AMT_TXN_PROC_FEE VARCHAR2(9 BYTE), '||
-                    'AMT_STTL_PROC_FEE VARCHAR2(9 BYTE), '||
-                    'ACQ_INST VARCHAR2(11 BYTE) NOT NULL ENABLE, '||
-                    'FORW_INST VARCHAR2(11 BYTE), '||
-                    'PAN_EXT VARCHAR2(28 BYTE), '||
-                    'TRACK2 VARCHAR2(37 BYTE), '||
-                    'REFNUM VARCHAR2(12 BYTE), '||
-                    'AUTH VARCHAR2(6 BYTE), '||
-                    'RESP_CODE VARCHAR2(3 BYTE), '||
-                    'SRV_RSTR_CODE NUMBER(3,0), '||
-                    'TERM_ID VARCHAR2(16 BYTE) NOT NULL ENABLE, '||
-                    'ACCEPTOR VARCHAR2(15 BYTE), '||
-                    'NAME_LOCAL VARCHAR2(40 BYTE), '||
-                    'ADD_RESP_DATA VARCHAR2(25 BYTE), '||
-                    'ADD_RETAIL_DATA VARCHAR2(700 BYTE), '||
-                    'CUR_CODE_TXN VARCHAR2(3 BYTE), '||
-                    'CUR_CODE_STTL VARCHAR2(3 BYTE), '||
-                    'CUR_CODE_CARDHOLD VARCHAR2(3 BYTE), '||
-                    'ADDS_AMOUNTS VARCHAR2(80 BYTE), '||
-                    'CARDH_DOC_NUM VARCHAR2(11 BYTE), '||
-                    'FIED_59 VARCHAR2(25 BYTE), '||
-                    'POS_CAPAB_CODE VARCHAR2(61 BYTE), '||
-                    'CARD_ISS_CAT_RSP VARCHAR2(26 BYTE), '||
-                    'INF_DATE VARCHAR2(100 BYTE), '||
-                    'PRIV_USE VARCHAR2(90 BYTE), '||
-                    'STTL_CODE NUMBER(1,0), '||
-                    'EXTD_PAY_CODE NUMBER(2,0), '||
-                    'REQ_INST_COUNTRY_CODE NUMBER(3,0), '||
-                    'STTL_INST_COUNTRY_CODE NUMBER(3,0), '||
-                    'NET_MGT_INF_CODE NUMBER(5,0), '||
-                    'DATE_ACTION VARCHAR2(8 BYTE), '||
-                    'ORG_DATA VARCHAR2(42 BYTE), '||
-                    'FILE_UPDATE_CODE VARCHAR2(1 BYTE), '||
-                    'FILE_SECURITY_CODE VARCHAR2(2 BYTE), '||
-                    'REP_TXN_AMT VARCHAR2(12 BYTE), '||
-                    'REP_STTL_AMT VARCHAR2(12 BYTE), '||
-                    'REP_TXN_FEE VARCHAR2(12 BYTE), '||
-                    'REP_STTL_FEE VARCHAR2(9 BYTE), '||
-                    'MSG_SEC_COD VARCHAR2(16 BYTE), '||
-                    'PAYEE VARCHAR2(25 BYTE), '||
-                    'REQ_INST VARCHAR2(11 BYTE), '||
-                    'FILE_NAME VARCHAR2(17 BYTE), '||
-                    'ACCT_1 VARCHAR2(28 BYTE), '||
-                    'ACCT_2 VARCHAR2(28 BYTE), '||
-                    'ATM_TERM_ADDR_BR VARCHAR2(33 BYTE), '||
-                    'AUTH_IND_CRT_DATA VARCHAR2(35 BYTE), '||
-                    'BIN_CARD_ISS_ID_CODE VARCHAR2(13 BYTE), '||
-                    'BATCH_SHIFT_DATA VARCHAR2(999 BYTE), '||
-                    'SETTL_DATA VARCHAR2(999 BYTE), '||
-                    'BIN_ACCT_1 VARCHAR2(11 BYTE), '||
-                    'BIN_ACCT_2 VARCHAR2(11 BYTE), '||
-                    'TRACK3 VARCHAR2(104 BYTE), '||
-                    'TRACK1 VARCHAR2(79 BYTE), '||
-                    'INTEG_CIRC_CARD VARCHAR2(1024 BYTE), '||
-                    'INVOICE_DATA VARCHAR2(29 BYTE), '||
-                    'PRE_AUTH_CHARGEBAK VARCHAR2(999 BYTE), '||
-                    'PRIVATE_FIELD VARCHAR2(999 BYTE), '||
-                    'INVOICE_DATA_0 VARCHAR2(20 BYTE), '||
-                    'PRE_AUTH_CHARGEBAK_0 VARCHAR2(41 BYTE), '||
-                    'USERIN VARCHAR2(24 BYTE) DEFAULT substr(user,1,24), '||
-                    'DATEIN DATE, '||
-                    'USERCHG VARCHAR2(24 BYTE), '||
-                    'DATECHG DATE, '||
-                    'TIME_STAMP VARCHAR2(17 BYTE), '||
-                    'DEST_APPL VARCHAR2(9 BYTE), '||
-                    'BMAP_EXTD VARCHAR2(16 BYTE), '||
-                    'CRED_NUM VARCHAR2(10 BYTE), '||
-                    'CRED_REV_NUM VARCHAR2(10 BYTE), '||
-                    'DEB_NUM VARCHAR2(10 BYTE), '||
-                    'DEB_REV_NUM VARCHAR2(10 BYTE), '||
-                    'TRF_NUM VARCHAR2(10 BYTE), '||
-                    'TRF_REV_NUM VARCHAR2(10 BYTE), '||
-                    'INQ_NUM VARCHAR2(10 BYTE), '||
-                    'AUTH_NUM VARCHAR2(10 BYTE), '||
-                    'CRED_PROC_FEE_AMT VARCHAR2(12 BYTE), '||
-                    'CRED_TXN_FEE_AMT VARCHAR2(12 BYTE), '||
-                    'DEB_PROC_FEE_AMT VARCHAR2(12 BYTE), '||
-                    'DEB_TXN_FEE_AMT VARCHAR2(12 BYTE), '||
-                    'CRED_AMT VARCHAR2(16 BYTE), '||
-                    'CRED_REV_AMT VARCHAR2(16 BYTE), '||
-                    'DEB_AMT VARCHAR2(16 BYTE), '||
-                    'DEB_REV_AMT VARCHAR2(16 BYTE), '||
-                    'AMT_NET_STTL VARCHAR2(17 BYTE), '||
-                    'STTL_INST_ID VARCHAR2(11 BYTE), '||
-                    'RECORD_DATA VARCHAR2(999 BYTE), '||
-                    'NET_MGT_INF_EXT NUMBER(4,0), '||
-                    'MSGID VARCHAR2(40 BYTE), '||
-                    'PAN_CIFRADO VARCHAR2(64 BYTE), '||
-                    'BIN_KEY VARCHAR2(11 BYTE), '||
-                    'SECUENCIAL_KEY NUMBER(12,0)'||
-                   ') TABLESPACE ' || p_tbs_dato || ' PARTITION BY RANGE (DATEIN) (';
+        p_sqlcode:=CONST_CODE_LOCK;
+        WHILE p_sqlcode=CONST_CODE_LOCK LOOP
+        SPP_DROP_PART_MES_SIN_FK(fecha_base,v_fila.NUM_PART_ATRAS,v_fila.NOM_TABLA,p_sqlcode,p_sqlerrm);
 
-          FOR i IN -p_partitions_antes .. p_partitions_desp LOOP
-               
-          v_sql := v_sql || ' PARTITION P_'||v_tabla||'_'||TO_CHAR(ADD_MONTHS(v_fecha_base,i),'YYYYMM')||' VALUES LESS THAN ('''||TO_CHAR(TRUNC(ADD_MONTHS(v_fecha_base,i+1), 'MM'),'YYYYMMDD')||''')';
+        IF p_sqlcode = CONST_CODE_OK THEN
+        SPI_PART_LOG(v_fila.NOM_SCHEMA,CONST_CODE_OK,'OK','Fin DROP particiones en:'||v_fila.NOM_TABLA,v_procedure,v_fila.NOM_TABLA); COMMIT;
+        ELSIF p_sqlcode = CONST_CODE_NOPARTITION THEN
+          NULL;
+        ELSIF p_sqlcode = CONST_CODE_ERROR THEN
+          RAISE e_finalizar;
+        ELSIF p_sqlcode = CONST_CODE_LOCK THEN
+          sleep_time();
+        ELSE
+          RAISE e_finalizar;        
+        END IF;    
+        END LOOP;
+        V_RETRY_COUNT:=0;
 
-          IF i < p_partitions_desp THEN
-              v_sql := v_sql || ', ';
-          END IF;
+        p_sqlcode:=CONST_CODE_LOCK;
+        WHILE p_sqlcode=CONST_CODE_LOCK LOOP
+        SPP_DROP_PART_MES_SIN_FK(fecha_base,v_fila.NUM_THPART_ATRAS,v_fila.NOM_THTABLA,p_sqlcode,p_sqlerrm);
 
-          END LOOP;      
-          v_sql := v_sql || ')';
+        IF p_sqlcode = CONST_CODE_OK THEN
+        SPI_PART_LOG(v_fila.NOM_SCHEMA,CONST_CODE_OK,'OK','Fin DROP particiones en:'||v_fila.NOM_THTABLA,v_procedure,v_fila.NOM_THTABLA); COMMIT;
+        ELSIF p_sqlcode = CONST_CODE_NOPARTITION THEN
+          NULL;
+        ELSIF p_sqlcode = CONST_CODE_ERROR THEN
+          RAISE e_finalizar;
+        ELSIF p_sqlcode = CONST_CODE_LOCK THEN
+          sleep_time();
+        ELSE
+          RAISE e_finalizar;        
+        END IF;    
+        END LOOP;
+        V_RETRY_COUNT:=0;
 
-          EXECUTE IMMEDIATE v_sql;
+        p_sqlcode := CONST_CODE_OK;
+        p_sqlerrm:= 'OK Fin ejecucion MANTENIMIENTO MENSUAL MAIN '||fecha_base;
 
-      IF v_tabla=my_array(2) THEN
-       -- CREATE/RECREATE primary, unique and foreign key constraints
-          EXECUTE IMMEDIATE v_sql_ddlt||' '||p_schema||'.'||v_tabla||' ADD CONSTRAINT "PK_THTXNLOG" PRIMARY KEY ("MSGTYPE", "PAN", "PRCODE", "AMOUNT_TXN", "TRACE", "TIME_LOCAL", "DATE_LOCAL", "POINT_COND_CODE", "ACQ_INST", "TERM_ID") USING INDEX TABLESPACE '||p_tbs_indice;
-       -- CREATE/RECREATE INDEXES
-          EXECUTE IMMEDIATE v_sql_ddlci||' '||p_schema||'.IDX_THLOG_1 ON '||p_schema||'.'||v_tabla||' ("MSGTYPE", "PAN", "AMOUNT_TXN", "TRACE", "TRANSDATE", "TRANSTIME") LOCAL TABLESPACE '||p_tbs_indice;
+        -- Mostrar el contenido de cada campo de la fila
+       /* DBMS_OUTPUT.PUT_LINE('Producto: ' || v_fila.producto);
+        DBMS_OUTPUT.PUT_LINE('Tabla: ' || v_fila.NOM_TABLA);
+        DBMS_OUTPUT.PUT_LINE('Fecha de ParticiÃ³n: ' || v_fila.fecha_part);
+        DBMS_OUTPUT.PUT_LINE('Tipo de Fecha de ParticiÃ³n: ' || v_fila.TIP_CAMPO_FECHA_PART);
+        DBMS_OUTPUT.PUT_LINE('Flag Mover Historial: ' || v_fila.FLG_MOVEDATATH);
+        DBMS_OUTPUT.PUT_LINE('Tabla Historial: ' || v_fila.NOM_THTABLA);
+        DBMS_OUTPUT.PUT_LINE('Flag FK: ' || v_fila.flag_fk);
+        DBMS_OUTPUT.PUT_LINE('Detalle FK: ' || v_fila.det_fk);
+        DBMS_OUTPUT.PUT_LINE('Particiones Atras: ' || v_fila.NUM_PART_ATRAS);
+        DBMS_OUTPUT.PUT_LINE('Particiones Adelante: ' || v_fila.NUM_PART_ADELANTE);
+        DBMS_OUTPUT.PUT_LINE('Periodo: ' || v_fila.periodo);
+        DBMS_OUTPUT.PUT_LINE('Tablespace: ' || v_fila.NOM_TBSDATOS);
+        DBMS_OUTPUT.PUT_LINE('Flag PAM: ' || v_fila.flag_pam);
+        DBMS_OUTPUT.PUT_LINE('----------------------------------------');*/
+    END LOOP;
+    CLOSE cur_particiones;
+
+        SPI_PART_LOG(v_schema,CONST_CODE_OK,'OK','************OK Fin ejecucion MANTENIMIENTO MENSUAL MAIN '||fecha_base||' ************',v_procedure,'******'); COMMIT;
+
+COMMIT;
+EXCEPTION
+  WHEN e_finalizar THEN 
+    return;
+  WHEN e_tablanoparticionada THEN 
+        p_sqlcode := CONST_CODE_NOPARTITION;
+        p_sqlerrm := 'INFO..La tabla '||v_tabla||' no esta particionada';
+  WHEN e_tbsdatonovalido THEN
+        p_sqlcode := CONST_CODE_NOPARTITION;
+        p_sqlerrm := 'ERROR: Tablespace de datos '||v_tablespace||' invalido';
+  WHEN OTHERS THEN
+        p_sqlcode := CONST_CODE_ERROR;
+        p_sqlerrm := 'ERROR..'||SQLCODE||''||SUBSTR (SQLERRM, 1, 200);
+        return;
+END SPP_MAIN_PART_MES_SIN_FK;
+
+
+/* ***************************************************************************************  */
+/* Nombre                : SPP_CREATE_PART_MES_SIN_FK                                    */
+/* Descripcion           : Permite agregar particiones mensuales a tablas transaccionales   */
+/* **************************************************************************************** */
+
+PROCEDURE SPP_CREATE_PART_MES_SIN_FK
+  ( p_fecha_base        IN VARCHAR2,        
+    p_num_meses         IN NUMBER,          
+    p_tablespace        IN VARCHAR2,       
+    p_name_table            IN VARCHAR2,
+    p_tipo_campodate    IN VARCHAR2,
+    p_sqlcode           OUT NUMBER,
+    p_sqlerrm           OUT VARCHAR2
+  )
+  AS
+      v_flag               INTEGER := 0;
+      v_DateNow            DATE;
+      v_DateNew            DATE;
+      v_DateLastPart       DATE;
+      v_StrCmd             VARCHAR2(512) := '';
+      v_StrDateNewPart     VARCHAR2(8) := '';
+      v_StrDateNewPartMax  VARCHAR2(8) := NULL;
+      v_StrDateNow         VARCHAR2(8) := '';
+      v_namePartition      VARCHAR2(80) := '';
+      v_Idx                NUMBER := 0;
+      v_NumMes             NUMBER;
+      v_sqlcode            NUMBER := CONST_CODE_OK;
+      v_sqlerrm            VARCHAR2(200) := '';
+      v_lastday           VARCHAR2(8);
+      v_schema            VARCHAR2(40);
+      v_procedure         VARCHAR2(26):='SPP_CREATE_PART_MES_SIN_FK';
+      e_num_meses          EXCEPTION;
+      e_tablespace         EXCEPTION;
+      e_no_add_partition   EXCEPTION;
+  BEGIN
+      p_sqlcode := CONST_CODE_OK;
+      p_sqlerrm := 'OK...ADD PARTITION';
+      v_flag := 0;
+      v_DateNow := TO_DATE(p_fecha_base,'YYYYMMDD');
+      SELECT UPPER(USER) INTO v_schema FROM dual;
+
+      SPI_PART_LOG(v_schema,p_sqlcode,'OK','Inicio ADD particiones en:'||p_name_table,v_procedure,p_name_table); COMMIT;
+
+      IF p_num_meses <= 0 THEN
+           RAISE e_num_meses;
       END IF;
 
+      IF TRIM(p_tablespace) IS NULL THEN
+           RAISE e_tablespace;
+      END IF;
 
-      IF v_tabla=my_array(1) THEN
+      v_namePartition := fun_obtener_ultima_particion(p_name_table);
+      v_DateLastPart := TO_DATE(SUBSTR(v_namePartition,-6,8)||'01', 'YYYYMMDD');
+      v_DateNew      := ADD_MONTHS(v_DateNow, p_num_meses);
+      v_NumMes       := TRUNC(MONTHS_BETWEEN(v_DateNew,v_DateLastPart));
 
-       -- CREATE/RECREATE primary, unique and foreign key constraints
-          EXECUTE IMMEDIATE v_sql_ddlt||' '||p_schema||'.'||v_tabla||' ADD CONSTRAINT "PK_TXNLOG" PRIMARY KEY ("MSGTYPE", "PAN", "PRCODE", "AMOUNT_TXN", "TRACE", "TIME_LOCAL", "DATE_LOCAL", "POINT_COND_CODE", "ACQ_INST", "TERM_ID") USING INDEX TABLESPACE '||p_tbs_indice;
-       -- CREATE/RECREATE INDEXES
-          EXECUTE IMMEDIATE v_sql_ddlci||' '||p_schema||'.IDX_LOG_1 ON '||p_schema||'.'||v_tabla||' ("MSGTYPE", "PAN", "AMOUNT_TXN", "TRACE", "TRANSDATE", "TRANSTIME") LOCAL TABLESPACE '||p_tbs_indice;
+      IF v_DateLastPart < v_DateNew THEN
+            -- EXECUTE IMMEDIATE 'ALTER SESSION SET NLS_DATE_FORMAT = ''YYYYMMDD''';
+                FOR v_Idx IN 1 .. v_NumMes LOOP
+                    v_StrDateNewPart    := TO_CHAR(ADD_MONTHS(v_DateNow, v_Idx),'YYYYMM'); 
+                    v_StrDateNewPart    := TO_CHAR(ADD_MONTHS(v_DateLastPart,v_Idx), 'YYYYMM'); --add mes+1 al limite de la particion values less a partir del nombre de la ultima particion
+                    v_StrDateNewPartMax := TO_CHAR(ADD_MONTHS(v_DateLastPart, v_Idx + 1) , 'YYYYMM')||'01';
 
-      --COMMENTS
-      EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."TIMEIN" IS ''Hora de registro de la transacciÃ¯Â¿Â½n de requerimiento (hora del sistema).''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."TIMEOUT" IS ''Hora de registro de la transacciÃ¯Â¿Â½n de respuesta (hora del sistema).''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."STATUS" IS ''Indica el estado de la transacciÃ¯Â¿Â½n, este debe tomar un valor igual al de un tipo de mensaje de respuesta de la norma ISO-8583, en caso de que su valor sea cero significa que la transacciÃ¯Â¿Â½n a sido registrada pero por algÃ¯Â¿Â½n problema no se actualizÃ¯Â¿Â½.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."REVERSAL" IS ''Indica si la transaccion ya ha sido reversada. Valiores comunes: 0 -> transaccion no ha sido reversada, 1 -> transacciÃ¯Â¿Â½n ya fue reversada.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."WHO_RSP" IS ''Indica quien respondio la transacciÃ¯Â¿Â½n. Valores comunes:  0  -> Switch, 1  -> Host,  2  -> SAF. ''';     
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."REG_CONTROL" IS ''Campo interno del SWITCH que se utiliza para dar soporte a su funcionalidad. Tiene la siguiente estructura:'||
-        'reg_control[0] = indica el fuente '||
-        'reg_control[1] = indica el destino. Puede tener los siguientes valores: 1 -> Switch, 2 -> Autorizador, 3 -> Host.'||
-        'reg_control[2] = indica la función. Puede tener los siguientes valores: 1 -> Pre-autorización, 2 -> Autorización, 3 -> Notificación.'||
-        'reg_control[3] = indica el tipo de autorización. Puede tomar los siguientes valores soportados: 1 -> on host, 2 -> off host, 3 -> on/off host.'||
-        'reg_control[4] = indica el método de autorización. Puede tomar los siguientes valores: 1 -> host en línea, 2 -> negativa con acumuladores, 3 -> positiva con acumuladores, 4 -> positiva con saldos, 5 -> negativa sin acumuladores.'||
-        'reg_control[5] = Indica quién respondió la transacción. Puede tomar los siguientes valores: 0 -> Switch, 1 -> Host, 2 -> Store and Forward.'||
-        'reg_control[6] = Indica si la respuesta es del host o del formateador. Puede tomar los siguientes valores: 0 -> Switch (La respuesta es del formateador - Reject), 1 -> Host (Respuesta es del Autorizador).''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."FTE_APPL" IS ''Nombre simbÃ¯Â¿Â½lico del que origina la transacciÃ¯Â¿Â½n.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."HEADER" IS ''Contiene la informaciÃ¯Â¿Â½n del header de la trama recibida''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."ORG_DRV" IS ''El cÃ¯Â¿Â½digo del origen del origen de la transacciÃ¯Â¿Â½n. Puede tomar los siguientes valores:'||
-          'ATM -> 2 /* ATM */'||
-          'BOX -> 4 /* BOX - electronic cash register */'||
-          'IVR  -> 7 /* IVR - interactive voice response */'||
-          'POS -> 14 /* POS */'||
-          'WEB -> 15 /* WEB */'||
-          'ADM -> 16 /* Terminal Administrativo */'||
-          'NET -> 52 /* NET */'||
-          'SWI -> 53 /* Switch */'||
-          'KIO -> 54       /*      KIOSCO */'||
-          'HPS -> 55 /* Heps */'||
-          'BCO -> 56 /* BANCO */'||
-          'UNI -> 57 /* Formateador Unico */'||
-          'VEN ->90 '||
-          'SAF -> 99   /*  Programa SNDSAF*/'||
-          'SDM -> 10   /*      Canal SODIMAC CMR*/''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."MSGTYPE" IS ''El tipo de mensaje de la transacciÃ¯Â¿Â½n.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."BM_PRIMARIO" IS ''Bitmap primario recibido en la trama de requerimiento si esta fue ISO-8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."BM_SECUNDARIO" IS ''Bitmap secundario recibido en la trama de requerimiento si esta fue ISO-8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."PAN" IS ''Es el nÃ¯Â¿Â½mero de tarjeta utilizada en la transacciÃ¯Â¿Â½n.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."PRCODE" IS ''Codigo de proceso de la transacciÃ¯Â¿Â½n que se corresponde con el campo 3 de la norma ISO 8583. Su formato es "AAFFTT", donde:'||
-      'AA -> Tipo de transacciÃ¯Â¿Â½n.'||
-      'FF ->  Cuenta de origen.'||
-      'TT -> Cuenta de destino.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."AMOUNT_TXN" IS ''Monto de la transacciÃ¯Â¿Â½n, en una moneda determinada, que es procesada por el SWITCH. Se corresponde con el campo 4 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."AMOUNT_STTL" IS ''Monto a transferirse del adquiriente al autorizador, en una moneda determinada, para equiparar los montos de las transacciones realizadas entre estas instituciones.Se corresponde con el campo 5 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."AMOUNT_CARDHOLD" IS ''Monto de la transacciÃ¯Â¿Â½n que realiza el cardholder, en una moneda  determinada. Se corresponde con el campo 6 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."TRANSDATE" IS ''Fecha en la que una determinada transacciÃ¯Â¿Â½n es recepcionada por el SWITCH. Formato: YYYYMMDD, donde: YYYY -> aÃ¯Â¿Â½o, MM -> mes, DD: dÃ¯Â¿Â½a.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."TRANSTIME" IS ''Hora en la que una determinada transacciÃ¯Â¿Â½n es recepcionada por el SWITCH. Formato: HHMMSS, donde: HH -> hora, MM -> minuto, SS -> segundos.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."CONVRATE_STTL" IS ''Tasa de conversiÃ¯Â¿Â½n para que el monto de la transacciÃ¯Â¿Â½n sea transformado a la moneda del seetlement. Se corresponde con el campo 9 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."CONVRATE_CARDHOLD" IS ''Tasa de conversion para que el monto de la transaccion, procesada por el SWITCH, sea transformado a la moneda en la que el cardholder realiza la transacciÃ¯Â¿Â½n. Se corresponde con el campo 10 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."TRACE" IS ''NÃ¯Â¿Â½mero asignado a la transacciÃ¯Â¿Â½n. Se corresponde con el campo 11 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."TIME_LOCAL" IS ''Hora local del lugar en el que se encuentra el card acceptor y en la que se dio inicio a la transacciÃ¯Â¿Â½n. Se corresponde con el campo12 de la norma ISO 8583. Su formato es HHMMSS, donde: HH -> Horas, MM -> Minutos, SS -> Segundos.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."DATE_LOCAL" IS ''Fecha local del punto donde se encuentra el card acepptor y en  la que la transaccion se dio inicio. Se corresponde con el campo 13 de la norma ISO 8583. Su formato es YYYYMMDD, donde: YYYY -> AÃ¯Â¿Â½os, MM -> Mes, DD -> DÃ¯Â¿Â½a.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."DATE_EXP" IS ''Fecha de expiraciÃ¯Â¿Â½n de la tarjeta con la cual se realiza la transacciÃ¯Â¿Â½n Se corresponde con el campo 14 de la norma ISO 8583. . Su formato es YYMM, donde: YY -> AÃ¯Â¿Â½o, MM -> Mes.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."DATE_STTL" IS ''Fecha en que se realiza la compensaciÃ¯Â¿Â½n.  Se corresponde con el campo 15 de la norma ISO 8583. Su formato es: MMDD, donde: MM -> Mes, DD -> DÃ¯Â¿Â½a.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."DATE_CONV" IS ''Fecha de conversiÃ¯Â¿Â½n del monto de la transaccion al settlement. Se corresponde con el campo 16 de la norma ISO 8583. Su formato es: MMDD, donde: MM -> Mes, DD -> DÃ¯Â¿Â½a.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."DATE_CAPTURE" IS ''La fecha en el que el adquiriente proceso la transacciÃ¯Â¿Â½n. Se corresponde con el campo 17 de la norma ISO 8583. Su formato es: MMDD, donde: MM -> Mes, DD -> DÃ¯Â¿Â½a.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."MERCHANT" IS ''ClasificaciÃ¯Â¿Â½n del rubro del establecimiento donde se inicia la transacciÃ¯Â¿Â½n. Se corresponde con el campo 18 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."ACQ_COUNTRY_CODE" IS ''El cÃ¯Â¿Â½digo del pais donde se encuentra la acquiring institution (adquiriente). Se corresponde con el campo 19 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."PAN_EXT_COUNTRY_CODE" IS ''El cÃ¯Â¿Â½digo del pais donde se encuentra la instituciÃ¯Â¿Â½n del autorizador. Se corresponde con el campo 20 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."FORW_COUNTRY_CODE" IS ''El cÃ¯Â¿Â½digo del pais donde se encuentra la forwarding institution. Se corresponde con el campo 21 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."POS_ENTRY_MODE" IS ''Campo compuesto por tres digitos, los primeros indicac la forma en la que el terminal obtuvo el PAN y el Ã¯Â¿Â½ltimo, si es que el terminal tiene la capacidad de leer PIN.  Se corresponde con el campo 22 de la norma ISO 8583. ''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."CARD_SEQ_NUM" IS ''NÃ¯Â¿Â½mero que distingue entre dos tarjetas con el mismo PAN o PAN extendido. Se corresponde con el campo 23 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."NET_INTERNAT" IS ''Identifica a una Ã¯Â¿Â½nica red internacional de autorizadores. Se corresponde con el campo 24 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."POINT_COND_CODE" IS ''CÃ¯Â¿Â½digo de la condiciÃ¯Â¿Â½n bajo la cual la transacciÃ¯Â¿Â½n inicia en el punto de servicio. Se corresponde con el campo 25 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."POINT_CAP_CODE" IS ''CÃ¯Â¿Â½digo que indentifica el mÃ¯Â¿Â½todo o el mÃ¯Â¿Â½ximo nÃ¯Â¿Â½mero de caracteres del PIN aceptados por el punto de servicio (POS) los cuales son utilizados para construir la informaciÃ¯Â¿Â½n del PIN. Se corresponde con el campo 26 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."AUTH_ID_RSP_LEN" IS ''Maxima longitud de la respuesta al requerimiento (transacciÃ¯Â¿Â½n) de  autorizacion que el adquiriente puede soportar. Solo es usado en una implementacion de Interbank.  Se corresponde con el campo 27 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."AMT_TXN_FEE" IS ''ComisiÃ¯Â¿Â½n en la moneda que opera el SWITCH y que es cargada por realizar una transaccion. Se corresponde con el campo 28 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."AMT_STTL_FEE" IS ''ComisiÃ¯Â¿Â½n a ser transferida entre el adquiriente y autorizador igual valor que el monto de las comisiones por transaccion realizadas por el SWITCH en la moneda del campo "AMOUNT_STL". Se corresponde con el campo 29 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."AMT_TXN_PROC_FEE" IS ''ComisiÃ¯Â¿Â½n cobrada por una entidad por el manejo o ruteo de mensajes en la moneda en la que el SWITCH procesa la transacciÃ¯Â¿Â½n. Se corresponde con el campo 30 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."AMT_STTL_PROC_FEE" IS ''ComisiÃ¯Â¿Â½n cobrada por una entidad por el manejo o ruteo de mensajes en la moneda de la cantidad que se envia entre el adquiriente y autorizador para realizar la equiparaciÃ¯Â¿Â½n de montos entre estos. Se corresponde con el campo 31 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."ACQ_INST" IS ''CÃ¯Â¿Â½digo de identificaciÃ¯Â¿Â½n de la acquiring institution (adquiriente) de una determinada transaccion. Se corresponde con el campo 32 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."FORW_INST" IS ''CÃ¯Â¿Â½digo de identificaciÃ¯Â¿Â½n de la forwarding  institution de una determinada transaccion. Se corresponde con el campo 33 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."PAN_EXT" IS ''Utilizado solo cuando el PAN empieza el 59. Es empleado para identificar una cuenta de un cliente o una interrelacion. Solo se utiliza con mensajes 500 de reconciliacion.  Se corresponde con el campo 34 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."TRACK2" IS ''Es la informaciÃ¯Â¿Â½n codificada en el TRACK 2 de la banda magnetica de la tarjeta. Se corresponde con el campo 35 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."REFNUM" IS ''NÃ¯Â¿Â½mero de referencia de la transacciÃ¯Â¿Â½n. Se corresponde con el campo 37 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."AUTH" IS ''Identificador de la respuesta asignado, por el autorizador, a la transacciÃ¯Â¿Â½n. Se corresponde con el campo 38 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."RESP_CODE" IS ''Codigo de respuesta de la transacciÃ¯Â¿Â½n. Se corresponde con el campo 39 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."SRV_RSTR_CODE" IS ''Codigo para identificar la disponibilidad geogrÃ¯Â¿Â½fica o del servicio. Se corresponde con el campo 40 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."TERM_ID" IS ''CÃ¯Â¿Â½digo que identifica el terminal, en la localizaciÃ¯Â¿Â½n del card acceptor, de la transacciÃ¯Â¿Â½n. Se corresponde con el campo 41 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."ACCEPTOR" IS ''CÃ¯Â¿Â½digo que identifica al card acceptor de la transacciÃ¯Â¿Â½n. Se corresponde con el campo 42 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."NAME_LOCAL" IS ''Nombre y localizaciÃ¯Â¿Â½n del card acceptor. Se corresponde con el campo 43 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."ADD_RESP_DATA" IS ''Datos adicionales requeridos en la respuesta de una transacciÃ¯Â¿Â½n. Se corresponde con el campo 44 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."ADD_RETAIL_DATA" IS ''Campo de uso privado. Se corresponde con el campo 48 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."CUR_CODE_TXN" IS ''CÃ¯Â¿Â½digo del tipo de moneda en que una transacciÃ¯Â¿Â½n es procesada por el SWITCH. Se corresponde con el campo 49 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."CUR_CODE_STTL" IS ''Codigo del tipo de moneda en el que se realizarÃ¯Â¿Â½ la equiparaciÃ¯Â¿Â½n de montos entre el adquiriente y autorizador. Se corresponde con el campo 50 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."CUR_CODE_CARDHOLD" IS ''Codigo de la moneda en la que el cardholder realiza una determinada transacciÃ¯Â¿Â½n. Se corresponde con el campo 51 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."ADDS_AMOUNTS" IS ''Contiene montos adicionales que son enviados en la respuesta del autorizador. Los montos adicionales son el saldo contable y disponible. Se corresponde con el campo 54 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."CARDH_DOC_NUM" IS ''Campo de uso reservado. Se corresponde con el campo 58 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."FIED_59" IS ''Campo de uso reservado. Se corresponde con el campo 59 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."POS_CAPAB_CODE" IS ''Campo de uso privado. Se corresponde con el campo 60 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."CARD_ISS_CAT_RSP" IS ''Campo de uso privado. Se corresponde con el campo 61 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."INF_DATE" IS ''Campo de uso privado. Se corresponde con el campo 62 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."PRIV_USE" IS ''Campo de uso privado. Se corresponde con el campo 63 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."STTL_CODE" IS ''Codigo que identifica al resultado de un requerimiento de concilianciÃ¯Â¿Â½n.  Se corresponde con el campo 66 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."EXTD_PAY_CODE" IS ''NÃ¯Â¿Â½nero de meses en el que el cardholder puede pagar una transacciÃ¯Â¿Â½n de crÃ¯Â¿Â½dito siempre que el autorizador lo permita. Se corresponde con el campo 67 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."REQ_INST_COUNTRY_CODE" IS ''CÃ¯Â¿Â½digo del paÃ¯Â¿Â½s donde se encuentra el autorizador. Se corresponde con el campo 68 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."STTL_INST_COUNTRY_CODE" IS ''CÃ¯Â¿Â½digo del paÃ¯Â¿Â½s donde se encuentra la settlement institution. Se corresponde con el campo 69 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."NET_MGT_INF_CODE" IS ''Utilizado para identificar el status de red. Se corresponde con el campo 70 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."DATE_ACTION" IS ''Uso futuro. Campo 73 de la normas ISO 8583''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."ORG_DATA" IS ''Datos contenidos en el mensaje original (mensaje previo) cuyo propÃ¯Â¿Â½sito es identificar a una transaccion para un extorno. Se corresponde con el campo 70 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."FILE_UPDATE_CODE" IS ''IndicaciÃ¯Â¿Â½n al sistema que mantiene el archivo cual procedimiento seguir. Se corresponde con el campo 91 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."FILE_SECURITY_CODE" IS ''Un cÃ¯Â¿Â½digo de seguridad de actualizaciÃ¯Â¿Â½n de archivo para indicar que el que originÃ¯Â¿Â½ el mensaje 300 estÃ¯Â¿Â½ autorizado para actualizar el archivo.Se corresponde con el campo 92 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."REP_TXN_AMT" IS ''Nuevo monto actual correspondiente con el campo "AMOUNT_TXN" necesario para llevar a cabo un extorno. Se corresponde con el campo 95 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."REP_STTL_AMT" IS ''Nuevo monto actual correspondiente con el campo "AMOUNT_STTL" necesario para llevar a cabo un extorno. Se corresponde con el campo 95 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."REP_TXN_FEE" IS ''Nuevo monto actual correspondiente con el campo "AMT_TXN_FEE" necesario para llevar a cabo un extorno. Se corresponde con el campo 95 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."REP_STTL_FEE" IS ''Nuevo monto actual correspondiente con el campo "AMT_STTL_FEE" necesario para llevar a cabo un extorno. Se corresponde con el campo 95 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."MSG_SEC_COD" IS ''Una verificaciÃ¯Â¿Â½n entre el card acceptor y el autorizador de que un mensaje esta autorizado para actualizar un archivo especial. Se corresponde con el campo 96 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."PAYEE" IS ''La tercera parte beneficiada en una transacciÃ¯Â¿Â½n de pago. Se corresponde con el campo 98 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."REQ_INST" IS ''Bin de ruteo de la requesting institution (autorizador) de la transacciÃ¯Â¿Â½n. Se corresponde con el campo 100 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."FILE_NAME" IS ''El nombre real o abreviado del archivo que es accesado. Se corresponde con el campo 101 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."ACCT_1" IS ''NÃ¯Â¿Â½mero usado para identificar la cuenta FROM de una transacciÃ¯Â¿Â½n. Se corresponde con el campo 102 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."ACCT_2" IS ''NÃ¯Â¿Â½mero usado para identificar la cuenta TO de una transacciÃ¯Â¿Â½n. Se corresponde con el campo 103 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."ATM_TERM_ADDR_BR" IS ''DirecciÃ¯Â¿Â½n de ATM-Terminal.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."AUTH_IND_CRT_DATA" IS ''Campo reservado para uso privado. Se corresponde con el campo 121 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."BIN_CARD_ISS_ID_CODE" IS ''Campo reservado para uso privado. Se corresponde con el campo 122 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."BATCH_SHIFT_DATA" IS ''Campo reservado para uso privado. Se corresponde con el campo 124 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."SETTL_DATA" IS ''Campo reservado para uso privado. Se corresponde con el campo 125 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."BIN_ACCT_1" IS ''Bin asociado a la cuenta FROM, el cual se utiliza para rutear el bin de ruteo del autorizador de la transacciÃ¯Â¿Â½n.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."BIN_ACCT_2" IS ''Bin asociado a la cuenta TO, el cual se utiliza para rutear el bin de ruteo del autorizador de la transacciÃ¯Â¿Â½n.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."TRACK3" IS ''Es la informaciÃ¯Â¿Â½n codificada en el TRACK 3 de la banda magnetica de la tarjeta. Se corresponde con el campo 36 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."TRACK1" IS ''Es la informaciÃ¯Â¿Â½n codificada en el TRACK 1 de la banda magnetica de la tarjeta. Se corresponde con el campo 44 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."INTEG_CIRC_CARD" IS ''Campo reservado para el uso de la ISO. Se corresponde con el campo 55  de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."INVOICE_DATA" IS ''Campo reservado para uso privado. Se corresponde con el campo 123 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."PRE_AUTH_CHARGEBAK" IS ''Campo reservado para uso privado. Se corresponde con el campo 126 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."PRIVATE_FIELD" IS ''Campo reservado para uso privado. Se corresponde con el campo 127 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."INVOICE_DATA_0" IS ''Campo de uso futuro.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."PRE_AUTH_CHARGEBAK_0" IS ''Campo de uso futuro.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."USERIN" IS ''Usuario que inserto el registro.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."DATEIN" IS ''Fecha de inserciÃ¯Â¿Â½n del registro.  Formato: DD/MM/YY.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."USERCHG" IS ''Ultimo usuario que modificÃ¯Â¿Â½ el registro.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."DATECHG" IS ''Fecha de la ultima modificaciÃ¯Â¿Â½n realizada.  Formato: DD/MM/YY.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."TIME_STAMP" IS ''Tiempo que  pone el formateador que recibe la transacciÃ¯Â¿Â½n del adquiriente; el cual es utilizado para verificar el correcto procesamiento de la transacciÃ¯Â¿Â½n.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."DEST_APPL" IS ''Nombre del proceso que enviarÃ¯Â¿Â½ la transaccion al autorizador.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."BMAP_EXTD" IS ''Bitmap 3 de la transaccion si es que este lo tuviera. Se corresponde con el campo 65 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."CRED_NUM" IS ''Representa el total de transacciones de credito procesadas. Se corresponde con el campo 74 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."CRED_REV_NUM" IS ''Representa el total de transacciones de debitos de extorno. Se corresponde con el campo 75 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."DEB_NUM" IS ''Representa el total de transacciones de debito procesadas. Se corresponde con el campo 76 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."DEB_REV_NUM" IS ''El total de transacciones de extorno de debito. Se corresponde con el campo 77 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."TRF_NUM" IS ''Total de todas las transferencias procesadas. Se corresponde con el campo 78 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."TRF_REV_NUM" IS ''Representa el total de extornos de transferencias procesados. Se corresponde con el campo 79 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."INQ_NUM" IS ''Representa la suma de todos los requerimientos procesados cuyo codigo de procesamiento es 30. Se corresponde con el campo 80 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."AUTH_NUM" IS ''Representa la suma de los requerimientos de autorizaciÃ¯Â¿Â½n y mensajes de notificaciÃ¯Â¿Â½n procesados. Se corresponde con el campo 81 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."CRED_PROC_FEE_AMT" IS ''La suma de todos los montos de todos los pagos procesados asociados con el manejo y ruteo de  las transacciones de crÃ¯Â¿Â½dito. Se corresponde con el campo 82 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."CRED_TXN_FEE_AMT" IS ''La suma de todos los montos de todos los pagos que resultan del procesamiento de todas las transacciones de crÃ¯Â¿Â½dito. Se corresponde con el campo 83 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."DEB_PROC_FEE_AMT" IS ''La suma de los montos de todos los pagos procesados asociados con el control y ruteo de las transacciones de debito. Se corresponde con el campo 84 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."DEB_TXN_FEE_AMT" IS ''Suma total de los montos de pagos hechos resultante de todas las transacciones de debito. Se corresponde con el campo 85 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."CRED_AMT" IS ''Suma total de los montos de credito sin incluir ningun cobro adicional. Se corresponde con el campo 86 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."CRED_REV_AMT" IS ''Suma total de los montos de los reversos de credito  sin incluir ningun cobro adicional. Se corresponde con el campo 87 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."DEB_AMT" IS ''Suma total de los montos de debito sin incluir ningun cobro adicional. Se corresponde con el campo 88 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."DEB_REV_AMT" IS ''Suma total de los montos de los reversos de debito sin incluir ningun cobro adicional. Se corresponde con el campo 89 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."AMT_NET_STTL" IS ''Valor de net de todos los montos totales. Se corresponde con el campo 97 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."STTL_INST_ID" IS ''Codigo para identificar la settlement institution. Se corresponde con el campo 99 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."RECORD_DATA" IS ''Campo reservado para uso privado. Se corresponde con el campo 120 de la norma ISO 8583.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."NET_MGT_INF_EXT" IS ''Campo de uso futuro.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."MSGID" IS ''CÃ¯Â¿Â½digo (empleado por el SIX/TCL) que sirve para rastrear la transacciÃ¯Â¿Â½n.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."PAN_CIFRADO" IS ''Pan cifrado con la clave DEK.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."BIN_KEY" IS ''BIN para identificar la clave(DEK) de cifrado de data.''';
-         EXECUTE IMMEDIATE v_sql_ddlc||' '||p_schema||'.'||v_tabla||'."SECUENCIAL_KEY" IS ''Secuencial de llave(DEK) utilizada en el cifrado de Data.''';
-         EXECUTE IMMEDIATE 'COMMENT ON TABLE '||p_schema||'.'||v_tabla||'  IS ''Esta tabla contiene el registro de todas las transacciones que han circulado por la red.''';
-      END IF; 
-      v_out_mensaje:= v_out_mensaje||''||CHR(10)||'OK: Tabla '||v_tabla||' Particionada creada';
-      idx := idx + 1; 
-END LOOP;
+                    IF p_tipo_campodate = 'VARCHAR2' THEN
+                      v_StrCmd := 'ALTER TABLE '||p_name_table||' ADD PARTITION P_'||p_name_table||'_' || v_StrDateNewPart || ' VALUES LESS THAN ('''|| v_StrDateNewPartMax || ''') TABLESPACE '|| p_tablespace;
+                    ELSE
+                      v_StrCmd := 'ALTER TABLE '||p_name_table||' ADD PARTITION P_'||p_name_table||'_' || v_StrDateNewPart || ' VALUES LESS THAN (TO_TIMESTAMP('''|| v_StrDateNewPartMax || ''',''YYYYMMDD'')) TABLESPACE '|| p_tablespace;
+                    END IF;
+                    EXECUTE IMMEDIATE v_StrCmd;
+                    SPI_PART_LOG(v_schema,p_sqlcode,'OK','Se agrego la particion: P_'||p_name_table||'_' || v_StrDateNewPart,v_procedure,p_name_table); COMMIT;
+                    v_flag := 1;
 
-    DBMS_OUTPUT.PUT_LINE(v_out_mensaje);
+                END LOOP;
+      END IF;
 
+    IF v_flag = 0 THEN
+      RAISE e_no_add_partition;
+    END IF;
+
+  EXCEPTION
+    WHEN e_num_meses THEN
+       p_sqlcode := CONST_CODE_ERROR;
+       p_sqlerrm := 'ERROR..Numero de meses ADD incorrecto : '||p_num_meses;
+       SPI_PART_LOG(v_schema,p_sqlcode,'ERROR','Numero de meses ADD incorrecto : '||p_num_meses,v_procedure,p_name_table); COMMIT;
+    WHEN e_tablespace THEN
+       p_sqlcode := CONST_CODE_ERROR;
+       p_sqlerrm := 'ERROR..Falta parametro tablespace ';
+       SPI_PART_LOG(v_schema,p_sqlcode,'ERROR','Falta parametro tablespace',v_procedure,p_name_table); COMMIT;
+
+    WHEN e_no_add_partition THEN
+       p_sqlcode := CONST_CODE_NOPARTITION;
+       p_sqlerrm := 'INFO..Aun no esta en limite del mes para adicionar particion '||p_fecha_base || '--> '||v_namePartition;
+       SPI_PART_LOG(v_schema,p_sqlcode,'INFO','Aun no esta en limite del mes para adicionar particion '||p_fecha_base || '--> '||v_namePartition,v_procedure,p_name_table); COMMIT;
+
+    WHEN OTHERS THEN  
+      v_sqlcode := SQLCODE;
+      v_sqlerrm := SQLERRM;
+      p_sqlcode := v_sqlcode;
+      p_sqlerrm := SUBSTR (v_sqlerrm, 1, 200);
+      V_RETRY_COUNT:=V_RETRY_COUNT+1;
+      
+      IF (v_sqlcode = -54 OR v_sqlcode = -60) AND V_RETRY_COUNT<=V_MAX_RETRIES THEN
+        p_sqlcode := CONST_CODE_LOCK;
+        p_sqlerrm := 'INFO..Se ha generado el bloqueo ('||V_RETRY_COUNT||'/'||V_MAX_RETRIES||')';
+       SPI_PART_LOG(v_schema,p_sqlcode,'INFO','Se ha generado el bloqueo ('||V_RETRY_COUNT||'/'||V_MAX_RETRIES||')',v_procedure,p_name_table); COMMIT;    
+
+      ELSE
+       SPI_PART_LOG(v_schema,p_sqlcode,'ERROR',p_sqlerrm,v_procedure,p_name_table); COMMIT;    
+      END IF;
+      
+      IF V_RETRY_COUNT > V_MAX_RETRIES THEN
+        p_sqlcode := CONST_CODE_ERROR;
+        p_sqlerrm := 'ERROR..Se alcanzo el maximo de reintentos ('||V_MAX_RETRIES||')';
+       SPI_PART_LOG(v_schema,p_sqlcode,'ERROR','Se alcanzo el maximo de reintentos ('||V_MAX_RETRIES||')',v_procedure,p_name_table); COMMIT;    
+      END IF;
+
+END SPP_CREATE_PART_MES_SIN_FK;
+
+/* ***************************************************************************************  */
+/* Nombre                : SPP_DROP_PART_MES_SIN_FK                                    */
+/* Descripcion           : Permite dropear particiones mensuales a tablas transaccionales   */
+/* **************************************************************************************** */
+
+PROCEDURE SPP_DROP_PART_MES_SIN_FK(
+  p_fecha_base       IN VARCHAR2,        
+  p_num_meses        IN NUMBER,         
+  p_name_table       IN VARCHAR2,
+  p_sqlcode          OUT NUMBER,
+  p_sqlerrm          OUT VARCHAR2) 
+  AS
+      v_flag               INTEGER := 0;
+      v_dif_mes            INTEGER := 0;
+      v_DateNow            DATE;
+      v_DateFirstPart1     DATE;
+      v_DateFirstPart2     DATE;
+      v_StrCmd             VARCHAR2(512) := '';
+      v_StrDateDropPart    VARCHAR2(8) := '';
+      v_StrDateNewPartMax  VARCHAR2(8) := NULL;
+      v_StrDateNow         VARCHAR2(8) := '';
+      v_namePartition      VARCHAR2(40) := '';
+      v_Idx                NUMBER := 0;
+      v_NumDays            NUMBER;
+      v_sqlcode            NUMBER := CONST_CODE_OK;
+      v_sqlerrm            VARCHAR2(200) := '';
+      v_lastday           VARCHAR2(8);
+      v_schema            VARCHAR2(40);
+      v_procedure         VARCHAR2(40):= 'SPP_DROP_PART_MES_SIN_FK';
+
+      e_no_drop            EXCEPTION;
+      e_num_meses          EXCEPTION;
+      v_num_reintentos NUMBER;
+  BEGIN
+
+      p_sqlcode := CONST_CODE_OK;
+      p_sqlerrm := 'OK.. DROP PARTITION DE TABLA '||p_name_table;
+      v_DateNow := TO_DATE(p_fecha_base,'YYYYMMDD');
+      v_flag := 0;
+      SELECT UPPER(USER) INTO v_schema FROM dual;
+
+      SPI_PART_LOG(v_schema,p_sqlcode,'OK','DROP PARTITION DE TABLA '||p_name_table,v_procedure,p_name_table); COMMIT;
+
+      IF p_num_meses <= 0 THEN
+         RAISE e_num_meses;
+      END IF;    
+      v_namePartition := fun_obtener_primera_particion(p_name_table);
+
+      --2.- Se obtiene nueva fecha y la probable primera partition --- se refiere a la nueva fecha para la primera particion
+      v_DateFirstPart1 := ADD_MONTHS(v_DateNow, p_num_meses * -1);
+      --3.- Convierte primnera partition en fecha  ---
+      v_DateFirstPart2:= TO_DATE(SUBSTR(v_namePartition,-6,8)||'01', 'YYYYMMDD');
+      --4.- se compara las fechas para proceder a eliminar las particiones mas antiguas ----
+      IF v_DateFirstPart1 >= v_DateFirstPart2 THEN
+         v_dif_mes := TRUNC(MONTHS_BETWEEN(v_DateFirstPart1,v_DateFirstPart2));  
+
+         -- obtiene el numero de meses diferecias
+         FOR v_idx IN 0..v_dif_mes LOOP
+             v_StrDateDropPart := TO_CHAR(ADD_MONTHS(v_DateFirstPart2,v_Idx), 'YYYYMM'); 
+             v_StrCmd := 'ALTER TABLE '||p_name_table||' DROP PARTITION ' || 'P_'||p_name_table||'_'||v_StrDateDropPart || ' UPDATE GLOBAL INDEXES';
+               EXECUTE IMMEDIATE v_StrCmd; 
+               SPI_PART_LOG(v_schema,p_sqlcode,'OK','Se dropeo la particion ' || 'P_'||p_name_table||'_'||v_StrDateDropPart,v_procedure,p_name_table); COMMIT;
+            v_flag := 1;
+         END LOOP;
+
+      END IF;      
+
+      IF v_flag = 0 THEN
+         RAISE e_no_drop;
+      END IF;
+
+  EXCEPTION
+    WHEN e_num_meses THEN
+       p_sqlcode := CONST_CODE_ERROR;
+       p_sqlerrm := 'ERROR.. Numero de meses DROP incorrecto : '||p_num_meses;
+       SPI_PART_LOG(v_schema,p_sqlcode,'ERROR','Numero de meses DROP incorrecto : '||p_num_meses,v_procedure,p_name_table); COMMIT;
+    WHEN e_no_drop THEN
+       p_sqlcode := CONST_CODE_NOPARTITION;
+       p_sqlerrm := 'INFO.. No esta aun en limite para DROP '||p_fecha_base || '--> '||v_namePartition;
+       SPI_PART_LOG(v_schema,p_sqlcode,'INFO','No esta aun en limite para DROP '||p_fecha_base || '--> '||v_namePartition,v_procedure,p_name_table); COMMIT;
+
+    WHEN OTHERS THEN
+      v_sqlcode := SQLCODE;
+      v_sqlerrm := SQLERRM;
+      p_sqlcode := v_sqlcode;
+      p_sqlerrm := SUBSTR (v_sqlerrm, 1, 200);
+      V_RETRY_COUNT:=V_RETRY_COUNT+1;
+
+      IF (v_sqlcode = -54 OR v_sqlcode = -60) AND V_RETRY_COUNT<=V_MAX_RETRIES THEN
+        p_sqlcode := CONST_CODE_LOCK;
+        p_sqlerrm := 'INFO..Se ha generado el bloqueo ('||V_RETRY_COUNT||'/'||V_MAX_RETRIES||')';
+        SPI_PART_LOG(v_schema,p_sqlcode,'INFO','Se ha generado el bloqueo en DROP ('||V_RETRY_COUNT||'/'||V_MAX_RETRIES||')',v_procedure,p_name_table); COMMIT;    
+       ELSE
+        SPI_PART_LOG(v_schema,p_sqlcode,'ERROR',p_sqlerrm,v_procedure,p_name_table); COMMIT;    
+       END IF;
+      IF V_RETRY_COUNT > V_MAX_RETRIES THEN
+        p_sqlcode := CONST_CODE_ERROR;
+        p_sqlerrm := 'ERROR..Se alcanzo el maximo de reintentos ('||V_MAX_RETRIES||')';
+        SPI_PART_LOG(v_schema,p_sqlcode,'ERROR','Se alcanzo el maximo de reintentos ('||V_MAX_RETRIES||')',v_procedure,p_name_table); COMMIT;    
+      
+      END IF;
+END SPP_DROP_PART_MES_SIN_FK;
+
+/* ***************************************************************************************  */
+/* Nombre                : SPI_INSERT_PART_SIN_FK                                               */
+/* Descripcion           : Permite insertar data de una particion de tabla transaccional    */
+/*                         a su tabla historica                                             */
+/* **************************************************************************************** */
+PROCEDURE SPI_INSERT_PART_SIN_FK(
+        p_fecha_base            IN VARCHAR2,
+        p_schema                IN VARCHAR2,
+        p_table_name            IN VARCHAR2,
+        p_table_name_his        IN VARCHAR2,
+        p_campo_fecha           IN VARCHAR2,
+        p_tipo_fecha            IN VARCHAR2,
+        p_sqlcode           OUT NUMBER,
+        p_sqlerrm           OUT VARCHAR2
+    )
+    IS
+        v_sqlcode            NUMBER := CONST_CODE_OK;
+        v_sqlerrm            VARCHAR2(200) := '';
+        move_data_query      VARCHAR2(1950);
+        v_part_act_txt       VARCHAR2(50);
+        v_part_act_his       VARCHAR2(50);
+        v_part_primer_txt       VARCHAR2(50);
+        v_fecha_inicio       TIMESTAMP(8);
+        v_fecha_fin          TIMESTAMP(8);
+        v_fecha_iniciotxn    TIMESTAMP(8);
+
+        v_fecha_iniciop       TIMESTAMP(8);
+        v_fecha_finp          TIMESTAMP(8);
+        v_fecha_iniciopv       VARCHAR2(8);
+        v_fecha_iniciotxnpv       VARCHAR2(8);
+
+        v_fecha_finpv         VARCHAR2(8);
+        v_where         VARCHAR2(1500);
+
+        particiones nombre_particiones_array := nombre_particiones_array();
+        particion             VARCHAR2(100);
+        v_primaria            VARCHAR2(100);
+        v_schema              VARCHAR2(40);
+        v_procedure           VARCHAR2(22):= 'SPI_INSERT_PART_SIN_FK';
+
+        e_sindatacarga          EXCEPTION;
+
+        v_num_reintentos        INTEGER;
+        ADD_PARTITION_EXCEPTION EXCEPTION;
+
+    BEGIN
+     
+     p_sqlcode := CONST_CODE_OK;
+     p_sqlerrm := 'OK...SPI_INSERT_PART_SIN_FK';
+     SELECT UPPER(USER) INTO v_schema FROM dual;
+     EXECUTE IMMEDIATE 'ALTER SESSION SET NLS_DATE_FORMAT = ''YYYYMMDD''';
+
+     SPI_PART_LOG(v_schema,p_sqlcode,'OK','Inicio de Cargar datos a historica:'||p_table_name_his,v_procedure,p_table_name); COMMIT;
+
+     v_part_act_his:= FUN_obt_actual_part(p_table_name_his);
+     v_part_act_txt:= FUN_obt_actual_part(p_table_name);
+     v_part_primer_txt:=FUN_obt_primer_part(p_table_name);
+     v_fecha_inicio:= FUN_obt_max_fecha_parth_times(p_table_name_his, v_part_act_his, p_campo_fecha, p_tipo_fecha);
+     v_fecha_fin := FUN_obt_max_fecha_partxn_times(p_table_name, v_part_act_txt, p_campo_fecha, p_tipo_fecha);
+     v_fecha_iniciotxn:= FUN_obt_min_fecha_partxn_times(p_table_name, v_part_primer_txt, p_campo_fecha, p_tipo_fecha);
+
+        IF p_tipo_fecha='VARCHAR2' THEN
+            v_fecha_iniciopv:=TO_CHAR(v_fecha_inicio,'YYYYMMDD')||'';
+            v_fecha_iniciotxnpv:=TO_CHAR(v_fecha_iniciotxn,'YYYYMMDD')||'';
+            IF v_fecha_iniciotxnpv > v_fecha_iniciopv THEN
+              v_fecha_inicio := v_fecha_iniciotxn; 
+            END IF;
+        ELSE
+            IF v_fecha_iniciotxn > v_fecha_inicio THEN
+              v_fecha_inicio := v_fecha_iniciotxn;  
+            END IF;
+        END IF;
+
+      IF v_fecha_inicio >= v_fecha_fin THEN
+      RAISE e_sindatacarga;
+      END IF;
+      
+      SPS_obtener_particiones(v_fecha_inicio,v_fecha_fin,p_table_name,particiones);
+ 
+    SPU_INDEXESNOLOGGING(p_schema,p_table_name_his);
+
+    FOR i IN particiones.FIRST .. particiones.LAST LOOP
+        particion:=particiones(i).pl||'';
+        SPI_PART_LOG(v_schema,p_sqlcode,'OK','Cargando data desde la particion:'||particion,v_procedure,p_table_name); COMMIT;
+
+        IF i = 1 THEN
+              v_fecha_iniciop:=v_fecha_inicio;
+              v_fecha_finp:=FUN_obtener_ultimo_dia_particion(particion);
+        ELSIF i=particiones.COUNT THEN
+              v_fecha_iniciop:=FUN_obtener_primer_dia_particion(particion);
+              v_fecha_finp:=v_fecha_fin;
+        ELSE
+              v_fecha_iniciop:=FUN_obtener_primer_dia_particion(particion);
+              v_fecha_finp:=FUN_obtener_ultimo_dia_particion(particion);
+        END IF;
+     
+        IF EXTRACT(YEAR FROM v_fecha_inicio) = EXTRACT(YEAR FROM v_fecha_fin) AND
+           EXTRACT(MONTH FROM v_fecha_inicio) = EXTRACT(MONTH FROM v_fecha_fin) AND
+           i = 1 THEN
+              v_fecha_iniciop:=v_fecha_inicio;
+              v_fecha_finp:=v_fecha_fin; 
+        END IF;
+ 
+    IF p_tipo_fecha='VARCHAR2' THEN
+      v_fecha_iniciopv:=TO_CHAR(v_fecha_iniciop,'YYYYMMDD');
+      v_fecha_finpv:=TO_CHAR(v_fecha_finp,'YYYYMMDD');
+      v_where:= 'WHERE '||p_campo_fecha||' BETWEEN '''||v_fecha_iniciopv||''' AND '''||v_fecha_finpv||'''';
+      SPI_PART_LOG(v_schema,p_sqlcode,'OK','Inicio de cargar data desde:'||v_fecha_iniciopv||' -> '||v_fecha_finpv,v_procedure,p_table_name); COMMIT;
+
+    ELSE
+      EXECUTE IMMEDIATE 'ALTER SESSION SET NLS_DATE_FORMAT = ''YYYYMMDD HH24MISS''';
+      v_where:= 'WHERE '||p_campo_fecha||' BETWEEN '''||v_fecha_iniciop||''' AND '''||v_fecha_finp||'''';
+      SPI_PART_LOG(v_schema,p_sqlcode,'OK','Inicio de cargar data de:'||v_fecha_iniciop||' -> '||v_fecha_finp,v_procedure,p_table_name); COMMIT;
+    END IF;
+
+
+            move_data_query:='
+                DECLARE
+                    TYPE tipo_arreglo IS TABLE OF '||p_table_name||'%ROWTYPE INDEX BY BINARY_INTEGER;
+                    lr_datos tipo_arreglo;
+                    CURSOR cur_insert IS
+                    SELECT /*+ PARALLEL('||p_table_name||',10) */ *
+                    FROM '||p_table_name||' PARTITION ('||particion||')
+                     '||v_where||';
+                BEGIN
+                    OPEN cur_insert;
+                    LOOP
+                        FETCH cur_insert BULK COLLECT INTO lr_datos LIMIT 5000;
+                        FORALL i IN 1..lr_datos.COUNT SAVE EXCEPTIONS
+                        INSERT /*+ PARALLEL('||p_table_name_his||',4) NOLOGGING APPEND*/ INTO '||p_table_name_his||' VALUES lr_datos (i);                             
+                        EXIT WHEN cur_insert%NOTFOUND;
+                        COMMIT;
+                    END LOOP;
+                    COMMIT;
+                    CLOSE cur_insert;            
+                    END;';
+    
+                EXECUTE IMMEDIATE move_data_query;
+
+            IF p_tipo_fecha='VARCHAR2' THEN
+            SPI_PART_LOG(v_schema,p_sqlcode,'OK','Se cargo la data desde:'||v_fecha_iniciopv||' -> '||v_fecha_finpv,v_procedure,p_table_name); COMMIT;
+            ELSE
+            SPI_PART_LOG(v_schema,p_sqlcode,'OK','Se cargo la data de:'||v_fecha_iniciop||' -> '||v_fecha_finp,v_procedure,p_table_name); COMMIT;
+            END IF;
+
+    END LOOP;
+
+    SPU_INDEXESLOGGING(p_schema,p_table_name_his);
+
+    EXCEPTION
+      WHEN e_sindatacarga THEN
+         p_sqlcode := CONST_CODE_NOPARTITION;
+         p_sqlerrm := 'INFO..Aun no hay data para cargar en TH';
+         SPI_PART_LOG(v_schema,p_sqlcode,'INFO','Aun no hay data para cargar en:'||p_table_name,v_procedure,p_table_name_his); COMMIT;    
+      WHEN OTHERS THEN
+        v_sqlcode := SQLCODE;
+        v_sqlerrm := SQLERRM;
+        p_sqlcode := v_sqlcode;
+        p_sqlerrm := 'ERROR..'||SUBSTR (v_sqlerrm, 1, 200);
+        V_RETRY_COUNT:=V_RETRY_COUNT+1;
+
+        IF (v_sqlcode = -54 OR v_sqlcode = -60) AND V_RETRY_COUNT<=V_MAX_RETRIES THEN
+          p_sqlcode := CONST_CODE_LOCK;
+          p_sqlerrm := 'INFO..Se ha generado el bloqueo ('||V_RETRY_COUNT||'/'||V_MAX_RETRIES||')';
+          SPI_PART_LOG(v_schema,p_sqlcode,'INFO','Se ha generado el bloqueo ('||V_RETRY_COUNT||'/'||V_MAX_RETRIES||')',v_procedure,p_table_name); COMMIT;    
+        ELSE
+        SPI_PART_LOG(v_schema,p_sqlcode,'ERROR',p_sqlerrm,v_procedure,p_table_name); COMMIT;   
+        END IF;
+
+        IF V_RETRY_COUNT > V_MAX_RETRIES THEN
+          p_sqlcode := CONST_CODE_ERROR;
+          p_sqlerrm := 'ERROR..Se alcanzo el maximo de reintentos ('||V_MAX_RETRIES||')';
+          SPI_PART_LOG(v_schema,p_sqlcode,'ERROR','Se alcanzo el maximo de reintentos ('||V_MAX_RETRIES||')',v_procedure,p_table_name); COMMIT;    
+        END IF;
+        ROLLBACK;
+    END SPI_INSERT_PART_SIN_FK;
+
+/* ***************************************************************************************  */
+/* Nombre                : SPU_INDEXESLOGGING                                            */
+/* Descripcion           : Permite obtener el nombre de la llave primaria                   */
+/* **************************************************************************************** */
+PROCEDURE SPU_INDEXESLOGGING (
+    p_schema IN VARCHAR2,
+    p_table_name IN VARCHAR2
+) IS
+    v_index_name VARCHAR2(255);
+    CURSOR c_indexes IS
+        SELECT INDEX_NAME
+        FROM ALL_INDEXES
+        WHERE TABLE_OWNER = UPPER(p_schema)
+          AND TABLE_NAME = UPPER(p_table_name);
+BEGIN
+
+    EXECUTE IMMEDIATE 'ALTER TABLE '|| p_schema || '.'||p_table_name||' LOGGING';
+
+    FOR r_index IN c_indexes LOOP
+        v_index_name := r_index.INDEX_NAME;
+        EXECUTE IMMEDIATE 'ALTER INDEX '|| p_schema || '.' || v_index_name || ' LOGGING';
+    END LOOP;
 
 EXCEPTION
-  WHEN e_schemanovalido THEN
-        DBMS_OUTPUT.PUT_LINE('ERROR: El schema '||p_schema||' no es valido');
-  WHEN e_tbsdatonovalido THEN
-        DBMS_OUTPUT.PUT_LINE('ERROR: Tablespace de datos '||p_tbs_dato||' invalido');
-  WHEN e_tbsindicenovalido THEN
-        DBMS_OUTPUT.PUT_LINE('ERROR: Tablespace de indices '||p_tbs_indice||' inexistente');
-  WHEN e_tablanoexiste THEN
-        DBMS_OUTPUT.PUT_LINE('ERROR: La Tabla '||v_tabla||' no esta creada');
-  WHEN e_tablaparticionada THEN
-        DBMS_OUTPUT.PUT_LINE('ERROR: La Tabla '||v_tabla||' ya esta particionada');
-  WHEN e_num_meses THEN
-        DBMS_OUTPUT.PUT_LINE('ERROR: El numero de particiones ingresado debe ser mayor a 0');
-  WHEN OTHERS THEN 
-        DBMS_OUTPUT.PUT_LINE(v_out_mensaje||''||CHR(10)||'ERROR: '||v_tabla||' Particionada: '||SQLERRM);
-        return;
-END;
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('Error: ' || SQLERRM);
+END SPU_INDEXESLOGGING;
+
+/* ***************************************************************************************  */
+/* Nombre                : SPU_INDEXESNOLOGGING                                            */
+/* Descripcion           : Permite obtener el nombre de la llave primaria                   */
+/* **************************************************************************************** */
+PROCEDURE SPU_INDEXESNOLOGGING (
+    p_schema IN VARCHAR2,
+    p_table_name IN VARCHAR2
+) IS
+    v_index_name VARCHAR2(255);
+    CURSOR c_indexes IS
+        SELECT INDEX_NAME
+        FROM ALL_INDEXES
+        WHERE TABLE_OWNER = UPPER(p_schema)
+          AND TABLE_NAME = UPPER(p_table_name);
+BEGIN
+
+    EXECUTE IMMEDIATE 'ALTER TABLE '|| p_schema || '.'||p_table_name||' NOLOGGING';
+
+    FOR r_index IN c_indexes LOOP
+        v_index_name := r_index.INDEX_NAME;
+        EXECUTE IMMEDIATE 'ALTER INDEX '|| p_schema || '.' || v_index_name || ' NOLOGGING';
+    END LOOP;
+
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('Error: ' || SQLERRM);
+END SPU_INDEXESNOLOGGING;
+
+/* ***************************************************************************************  */
+/* Nombre                : FUN_obtener_primer_dia_particion                                            */
+/* Descripcion           : Permite obtener el nombre de la llave primaria                   */
+/* **************************************************************************************** */
+
+FUNCTION FUN_obtener_primer_dia_particion(
+    nombre_particion IN VARCHAR2
+) RETURN TIMESTAMP IS
+    anio_mes VARCHAR2(6);
+    primer_dia TIMESTAMP;
+BEGIN
+    anio_mes := SUBSTR(nombre_particion, INSTR(nombre_particion, '_', -1) + 1);
+    primer_dia := TO_TIMESTAMP(anio_mes || '01', 'YYYYMMDD');
+
+    RETURN primer_dia;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE_APPLICATION_ERROR(-20001, 'Error en el procesamiento de la particion: ' || SQLERRM);
+END FUN_obtener_primer_dia_particion;
+
+
+/* ***************************************************************************************  */
+/* Nombre                : FUN_obtener_ultimo_dia_particion                                            */
+/* Descripcion           : Permite obtener el nombre de la llave primaria                   */
+/* **************************************************************************************** */
+
+FUNCTION FUN_obtener_ultimo_dia_particion(
+    nombre_particion IN VARCHAR2
+) RETURN TIMESTAMP IS
+    anio_mes VARCHAR2(6);
+    ultimo_dia TIMESTAMP;
+BEGIN
+    anio_mes := SUBSTR(nombre_particion, INSTR(nombre_particion, '_', -1) + 1);
+    ultimo_dia := TO_TIMESTAMP(LAST_DAY(TO_DATE(anio_mes||'01', 'YYYYMMDD')) || ' 235959','YYYYMMDD HH24MISS');
+
+    RETURN ultimo_dia;
+
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE_APPLICATION_ERROR(-20001, 'Error en el procesamiento de la particion: ' || SQLERRM);
+END FUN_obtener_ultimo_dia_particion;
+
+
+/* ***************************************************************************************  */
+/* Nombre                : SPS_obtener_particiones                                            */
+/* Descripcion           : Obtiene las particiones en un rango de fechas                   */
+/* **************************************************************************************** */
+
+PROCEDURE SPS_obtener_particiones(
+    fecha_inicio IN TIMESTAMP,
+    fecha_fin IN TIMESTAMP,
+    nombre_tabla IN VARCHAR2,
+    particiones IN OUT nombre_particiones_array  
+) IS
+    inicio_mes NUMBER := EXTRACT(YEAR FROM fecha_inicio) * 100 + EXTRACT(MONTH FROM fecha_inicio);
+    fin_mes NUMBER := EXTRACT(YEAR FROM fecha_fin) * 100 + EXTRACT(MONTH FROM fecha_fin);
+    v_rec data_rec; 
+    v_rec_var VARCHAR2(100);
+BEGIN
+
+    FOR mes IN inicio_mes .. fin_mes LOOP
+        v_rec_var := 'P_' || nombre_tabla || '_' || TO_CHAR(mes, 'FM999999');
+        v_rec.pl := 'P_' || nombre_tabla || '_' || TO_CHAR(mes, 'FM999999');
+
+        IF FUN_validar_particion_existente(nombre_tabla,v_rec_var) THEN
+        particiones.EXTEND;  
+        particiones(particiones.LAST) := v_rec;
+        END IF;
+
+    END LOOP;
+
+END SPS_obtener_particiones;
+
+/* ***************************************************************************************  */
+/* Nombre                : FUN_obt_min_fecha_partxn_times                                  */
+/* Descripcion           : Permite obtener la minima fecha con data en una particion       */
+/* **************************************************************************************** */
+
+FUNCTION FUN_obt_min_fecha_partxn_times(
+    p_table_name    IN VARCHAR2,  
+    p_partition_name IN VARCHAR2, 
+    p_fecha_field   IN VARCHAR2,
+    p_tipo_fecha    IN VARCHAR2
+) RETURN TIMESTAMP
+IS
+    v_min_date      TIMESTAMP;
+    v_partition_date      TIMESTAMP;
+
+BEGIN
+    v_partition_date := TO_TIMESTAMP(SUBSTR(p_partition_name, -6)||'01', 'YYYYMMDD');
+
+    IF p_tipo_fecha='VARCHAR2' THEN
+      EXECUTE IMMEDIATE 'SELECT TO_TIMESTAMP(MIN(' || p_fecha_field || '),''YYYYMMDD'') FROM ' || p_table_name || ' PARTITION (' || p_partition_name || ')'
+      INTO v_min_date;
+      v_min_date := TO_TIMESTAMP(TRUNC(v_min_date) || ' 235958','YYYYMMDD HH24MISS');
+
+    ELSE
+      EXECUTE IMMEDIATE 'SELECT MIN(' || p_fecha_field || ') FROM ' || p_table_name || ' PARTITION (' || p_partition_name || ')'
+      INTO v_min_date;
+      v_min_date:= TO_TIMESTAMP(TRUNC(v_min_date) || ' 000000','YYYYMMDD HH24MISS');
+    END IF;
+
+    RETURN v_min_date;
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN v_partition_date;
+END FUN_obt_min_fecha_partxn_times;
+
+/* ***************************************************************************************  */
+/* Nombre                : FUN_obt_max_fecha_parth_times                                    */
+/* Descripcion           : Permite obtener la maxima fecha con data en una particion historica */
+/* **************************************************************************************** */
+
+FUNCTION FUN_obt_max_fecha_parth_times(
+    p_table_name    IN VARCHAR2,  
+    p_partition_name IN VARCHAR2, 
+    p_fecha_field   IN VARCHAR2,
+    p_tipo_fecha    IN VARCHAR2
+) RETURN TIMESTAMP
+IS
+    v_max_date      TIMESTAMP;
+    v_partition_date TIMESTAMP;
+BEGIN
+    v_partition_date := TO_TIMESTAMP(SUBSTR(p_partition_name, -6)||'01 000000', 'YYYYMMDD HH24MISS');
+    
+    IF p_tipo_fecha='VARCHAR2' THEN
+        EXECUTE IMMEDIATE 'SELECT TO_TIMESTAMP(MAX(' || p_fecha_field || '),''YYYYMMDD'') + INTERVAL ''1'' DAY FROM ' || p_table_name || ' PARTITION (' || p_partition_name || ')'
+        INTO v_max_date;
+    ELSE
+      EXECUTE IMMEDIATE 'SELECT MAX(' || p_fecha_field || ') + INTERVAL ''1'' DAY FROM ' || p_table_name || ' PARTITION (' || p_partition_name || ')'
+      INTO v_max_date;
+    END IF;
+
+    IF v_max_date IS NULL THEN
+        v_max_date := v_partition_date;
+    ELSE
+        v_max_date := TO_TIMESTAMP(TRUNC(v_max_date) || ' 000000','YYYYMMDD HH24MISS');
+    END IF;
+
+    RETURN v_max_date;
+
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN v_partition_date;
+END FUN_obt_max_fecha_parth_times;
+
+/* ***************************************************************************************  */
+/* Nombre                : FUN_obt_max_fecha_partxn_times                                   */
+/* Descripcion           : Permite obtener la maxima fecha con data en una particion txn    */
+/* **************************************************************************************** */
+
+FUNCTION FUN_obt_max_fecha_partxn_times(
+    p_table_name    IN VARCHAR2,  
+    p_partition_name IN VARCHAR2, 
+    p_fecha_field   IN VARCHAR2,
+    p_tipo_fecha    IN VARCHAR2
+) RETURN TIMESTAMP
+IS
+    v_max_date      TIMESTAMP;
+    v_partition_date      TIMESTAMP;
+
+BEGIN
+      v_partition_date := TO_TIMESTAMP(SUBSTR(p_partition_name, -6)||'01', 'YYYYMMDD');
+    IF p_tipo_fecha='VARCHAR2' THEN
+      EXECUTE IMMEDIATE 'SELECT TO_TIMESTAMP(MAX(' || p_fecha_field || '),''YYYYMMDD'') - INTERVAL ''1'' DAY FROM ' || p_table_name || ' PARTITION (' || p_partition_name || ')'
+      INTO v_max_date;
+    ELSE
+      EXECUTE IMMEDIATE 'SELECT MAX(' || p_fecha_field || ') - INTERVAL ''1'' DAY FROM ' || p_table_name || ' PARTITION (' || p_partition_name || ')'
+      INTO v_max_date;
+    END IF;
+    RETURN TO_TIMESTAMP(TRUNC(v_max_date) || ' 235959','YYYYMMDD HH24MISS');
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN v_partition_date;
+END FUN_obt_max_fecha_partxn_times;
+
+/* ***************************************************************************************  */
+/* Nombre                : FUN_obt_primer_part                                              */
+/* Descripcion           : Permite obtener la primera Particion con data                    */
+/* **************************************************************************************** */
+
+FUNCTION FUN_obt_primer_part(p_table_name IN VARCHAR2)
+RETURN VARCHAR2
+IS
+    v_last_month_partition VARCHAR2(50);
+    v_count_rows           NUMBER;
+BEGIN
+    FOR rec IN (SELECT partition_name
+                FROM user_tab_partitions
+                WHERE table_name = UPPER(p_table_name)
+                )
+    LOOP
+        EXECUTE IMMEDIATE 'SELECT COUNT(*) FROM ' || p_table_name || ' PARTITION (' || rec.partition_name || ')' 
+            INTO v_count_rows;
+        IF v_count_rows > 0 THEN
+            v_last_month_partition := rec.partition_name;
+            EXIT;
+        END IF;
+    END LOOP;
+
+    IF v_last_month_partition IS NOT NULL THEN
+        RETURN v_last_month_partition;
+    ELSE
+        RETURN fun_obtener_primera_particion(p_table_name);
+    END IF;
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN NULL;
+END FUN_obt_primer_part;
+/* ***************************************************************************************  */
+/* Nombre                : FUN_obt_actual_part                                                   */
+/* Descripcion           : Permite obtener el nombre de la particion actual                   */
+/* **************************************************************************************** */
+
+FUNCTION FUN_obt_actual_part(p_table_name IN VARCHAR2)
+RETURN VARCHAR2
+IS
+    v_last_month_partition VARCHAR2(50);
+    v_count_rows           NUMBER;
+BEGIN
+    FOR rec IN (SELECT partition_name
+                FROM user_tab_partitions
+                WHERE table_name = UPPER(p_table_name)  -- Asegura que el nombre de la tabla sea en mayÃºsculas
+                ORDER BY partition_position DESC)
+    LOOP
+        EXECUTE IMMEDIATE 'SELECT COUNT(*) FROM ' || p_table_name || ' PARTITION (' || rec.partition_name || ')' 
+            INTO v_count_rows;
+        IF v_count_rows > 0 THEN
+            v_last_month_partition := rec.partition_name;
+            EXIT;
+        END IF;
+    END LOOP;
+
+    IF v_last_month_partition IS NOT NULL THEN
+        RETURN v_last_month_partition;
+    ELSE
+        RETURN fun_obtener_primera_particion(p_table_name);
+    END IF;
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN NULL;
+END FUN_obt_actual_part;
+
+
+/* ***************************************************************************************  */
+/* Nombre                : fun_obtener_ultima_particion                                    */
+/* Descripcion           : Permite obtener la ultima particion   */
+/* **************************************************************************************** */
+
+FUNCTION fun_obtener_ultima_particion(p_name_table IN VARCHAR2)
+RETURN VARCHAR2
+IS
+   v_namePartition VARCHAR2(255);
+BEGIN
+   SELECT MAX(partition_name) KEEP (DENSE_RANK LAST ORDER BY partition_position) 
+   INTO v_namePartition
+   FROM user_tab_partitions
+   WHERE table_name = UPPER(p_name_table)  
+   GROUP BY table_name;
+   RETURN v_namePartition;
+EXCEPTION
+   WHEN NO_DATA_FOUND THEN
+      RETURN NULL;  
+   WHEN OTHERS THEN
+      RAISE;  
+END fun_obtener_ultima_particion;
+/* ***************************************************************************************  */
+/* Nombre                : fun_obtener_primera_particion                                    */
+/* Descripcion           : Permite obtener la primera particion                              */
+/* **************************************************************************************** */
+
+FUNCTION fun_obtener_primera_particion(p_name_table IN VARCHAR2)
+RETURN VARCHAR2
+IS
+   v_namePartition VARCHAR2(255);
+BEGIN
+    SELECT max(partition_name) keep (dense_rank first order by partition_position) name_partition
+    INTO  v_namePartition 
+    FROM user_tab_partitions
+    WHERE table_name = UPPER(p_name_table) 
+    GROUP BY table_name;
+   RETURN v_namePartition;
+EXCEPTION
+   WHEN NO_DATA_FOUND THEN
+      RETURN NULL;  
+   WHEN OTHERS THEN
+      RAISE;  
+END fun_obtener_primera_particion;
+
+/* ***************************************************************************************  */
+/* Nombre                : FUN_validar_particion_existente                                                  */
+/* Descripcion           : Verifica si una particion existe                                  */
+/* **************************************************************************************** */
+
+FUNCTION FUN_validar_particion_existente(
+    p_table_name IN VARCHAR2,
+    p_partition_name IN VARCHAR2
+) RETURN BOOLEAN IS
+    v_count NUMBER;  -- Variable para contar las particiones
+BEGIN
+    EXECUTE IMMEDIATE 'SELECT COUNT(*) FROM USER_TAB_PARTITIONS WHERE TABLE_NAME = UPPER(:1) AND PARTITION_NAME = UPPER(:2)'
+    INTO v_count
+    USING p_table_name, p_partition_name;
+    RETURN v_count > 0;
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('Error al validar la partición: ' || SQLERRM);
+        RETURN FALSE;  
+END FUN_validar_particion_existente;
+
+/* ***************************************************************************************  */
+/* Nombre                : sleep_time                                                        */
+/* Descripcion           : Brinda tiempo de ejecucion al package                             */
+/* **************************************************************************************** */
+    PROCEDURE sleep_time
+    IS
+      start_time TIMESTAMP:=SYSTIMESTAMP;
+      curr_time  TIMESTAMP;
+      cnt        NUMBER:=0;
+    BEGIN
+      LOOP
+        cnt:=cnt + 1;
+        curr_time:=SYSTIMESTAMP;
+      EXIT WHEN curr_time > start_time + 0.5/(24*60);
+      END LOOP;
+   END sleep_time;
+
+
+
+END PKG_MTTOPART;
 /
 
 spool off
